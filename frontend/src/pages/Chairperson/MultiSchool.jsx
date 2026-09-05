@@ -11,10 +11,11 @@ import {
   AlertTriangle, CheckCircle2, BarChart3, Target, SendHorizontal, Sparkles,
   ChevronRight, Award, Zap, Lightbulb, ArrowUpRight, ArrowDownRight,
   Activity, Layers, Crown, Network, Minus, Grid3x3, PieChart as PieIcon,
-  GitCompare, BookOpen, Flame, Eye, Shield, Gauge,
+  GitCompare, BookOpen, Flame, Eye, Shield, Gauge, Copy, Check,
 } from 'lucide-react';
 import api from '../../api/client';
 import { Page, EASE, staggerContainer, staggerItem } from '../../lib/motion.jsx';
+import { SkeletonPage } from '../../components/Skeleton.jsx';
 import { CountUp, Toast, Modal } from '../../components/ui.jsx';
 
 const COLORS = ['#4f7df3', '#34bfa1', '#f0a04b', '#8b5cf6', '#e85d75', '#0ea5e9'];
@@ -88,6 +89,7 @@ export default function ChairpersonMultiSchool() {
   const [compare, setCompare] = useState(null);
   const [rankings, setRankings] = useState(null);
   const [insights, setInsights] = useState([]);
+  const [attTrends, setAttTrends] = useState(null); // { window[], schools[{school_id,name,weeks[]}] }
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [aiOpen, setAiOpen] = useState(true);
@@ -95,8 +97,29 @@ export default function ChairpersonMultiSchool() {
   const [messages, setMessages] = useState([]);
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
+  const [copiedIdx, setCopiedIdx] = useState(null);
   const messagesEndRef = useRef(null);
   const showToast = (m,t='success') => { setToast({message:m,type:t}); setTimeout(()=>setToast(null),2600); };
+
+  /* message meta helpers — time label + copy-to-clipboard on bot answers */
+  const fmtTime = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    let h = d.getHours(); const m = String(d.getMinutes()).padStart(2, '0');
+    const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+    return `${h}:${m} ${ap}`;
+  };
+  const copyMsg = async (i, text) => {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch { /* unsupported */ }
+      ta.remove();
+    }
+    setCopiedIdx(i);
+    setTimeout(() => setCopiedIdx(c => (c === i ? null : c)), 1600);
+  };
 
   const loadAll = useCallback(() => {
     setLoading(true);
@@ -106,8 +129,9 @@ export default function ChairpersonMultiSchool() {
       api.get('/chairperson/compare'),
       api.get('/chairperson/rankings'),
       api.get('/chairperson/insights'),
-    ]).then(([o,s,c,r,ins]) => {
-      setOverview(o.data); setSchools(s.data); setCompare(c.data); setRankings(r.data); setInsights(ins.data);
+      api.get('/chairperson/trends?weeks=6'),
+    ]).then(([o,s,c,r,ins,at]) => {
+      setOverview(o.data); setSchools(s.data); setCompare(c.data); setRankings(r.data); setInsights(ins.data); setAttTrends(at.data);
     }).catch(e => { console.error(e); showToast('Failed to load','error'); }).finally(()=>setLoading(false));
   }, []);
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -116,14 +140,14 @@ export default function ChairpersonMultiSchool() {
   const askAI = async (q) => {
     const question = (q ?? aiInput).trim();
     if (!question || aiLoading) return;
-    setAiInput(''); setMessages(p => [...p, {role:'user',content:question}]); setAiLoading(true);
-    try { const res = await api.post('/chairperson/ai/analyze', {question}); setMessages(p => [...p, {role:'bot',content:res.data.answer,source:res.data.source}]); }
-    catch { setMessages(p => [...p, {role:'bot',content:'AI unavailable.'}]); }
+    setAiInput(''); setMessages(p => [...p, {role:'user',content:question,ts:Date.now()}]); setAiLoading(true);
+    try { const res = await api.post('/chairperson/ai/analyze', {question}); setMessages(p => [...p, {role:'bot',content:res.data.answer,source:res.data.source,ts:Date.now()}]); }
+    catch { setMessages(p => [...p, {role:'bot',content:'AI unavailable.',ts:Date.now()}]); }
     setAiLoading(false);
   };
   const inspectSchool = async (id) => { try { const r = await api.get(`/chairperson/schools/${id}/inspect`); setSchoolInspect(r.data); } catch { showToast('Failed','error'); } };
 
-  if (loading) return <Page><div className="skeleton-card" style={{padding:80,textAlign:'center',color:'var(--text-muted)'}}>Loading command center…</div></Page>;
+  if (loading) return <SkeletonPage eyebrowW={104} titleW={300} subW={420} stats={4} charts={2} rows={4} />;
   if (!overview) return <Page><div className="glass" style={{padding:60,textAlign:'center'}}>No data.</div></Page>;
 
   const schoolAvgData = schools.map((s,i) => ({name: s.name?.length>12?s.name.slice(0,12)+'…':s.name, avg: Math.round(s.average_pct||0), att: Math.round(s.attendance_rate||0), color: COLORS[i%COLORS.length] }));
@@ -145,6 +169,25 @@ export default function ChairpersonMultiSchool() {
   // SUBJECT LEADERSHIP HEATMAP
   const leadershipSubjects = subjectLeaders.map(s => s.subject);
   const leadershipSchools = schools.map(s => s.name);
+
+  // CROSS-SCHOOL ATTENDANCE TREND ROWS — one strip per school, aligned weeks
+  const xTrendWindow = attTrends?.window || [];
+  const xTrendRows = (attTrends?.schools || []).map((s, i) => {
+    const vals = (s.weeks || []).filter(w => w.pct != null);
+    const last = vals.length ? vals[vals.length - 1].pct : null;
+    const prev = vals.length >= 2 ? vals[vals.length - 2].pct : null;
+    const best = vals.length ? vals.reduce((a, b) => (b.pct > a.pct ? b : a)) : null;
+    return {
+      ...s,
+      color: COLORS[i % COLORS.length],
+      last, prev,
+      delta: last != null && prev != null ? last - prev : null,
+      best,
+    };
+  });
+  const xTrendLeader = xTrendRows.length
+    ? xTrendRows.reduce((a, b) => ((b.last ?? -1) > (a.last ?? -1) ? b : a))
+    : null;
 
   // NARRATIVE
   const bestSchool = overview.best_school;
@@ -279,6 +322,56 @@ export default function ChairpersonMultiSchool() {
               </ResponsiveContainer>
             </div>
           </motion.div>
+
+          {/* CROSS-SCHOOL ATTENDANCE TRENDS — first TEMPORAL portfolio view */}
+          {xTrendRows.length > 0 && (
+            <motion.div className="chart-card-premium fx-xstrend-card" initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{delay:0.32}}>
+              <div className="chart-header-premium">
+                <div className="chart-title-premium"><Activity size={18} /> Cross-School Attendance Trends</div>
+                <span className="chart-annotation">Last {xTrendWindow.length} weeks · Mon-Fri</span>
+              </div>
+              {xTrendLeader?.last != null && (
+                <div className="fx-xstrend-lead" title={`${xTrendLeader.name} leads this week at ${Math.round(xTrendLeader.last)}%`}>
+                  <Trophy size={13} />
+                  <span><strong>{xTrendLeader.name}</strong> leads the current week at <strong>{Math.round(xTrendLeader.last)}%</strong>
+                    {xTrendLeader.delta != null && <> ({xTrendLeader.delta >= 0 ? '+' : ''}{xTrendLeader.delta.toFixed(1)} pts vs last week)</>}
+                  </span>
+                </div>
+              )}
+              <div className="fx-xstrend-grid" role="img" aria-label="Attendance percent per school for the last six weeks">
+                {xTrendRows.map(row => (
+                  <div key={row.school_id} className="fx-xstrend-row" onClick={() => inspectSchool(row.school_id)} role="button" tabIndex={0}
+                    onKeyDown={e => { if (e.key === 'Enter') inspectSchool(row.school_id); }}
+                    title={`${row.name} — click to inspect`}>
+                    <span className="fx-xstrend-dot" style={{ background: row.color }} aria-hidden="true" />
+                    <span className="fx-xstrend-name" title={row.name}>{row.name}</span>
+                    <span className="fx-xstrend-strip">
+                      {(row.weeks || []).map((w, i) => (
+                        <span key={i} className={`fx-xstrend-col${i === (row.weeks || []).length - 1 ? ' is-cur' : ''}${w.pct == null ? ' is-empty' : ''}`}
+                          title={w.pct == null ? `${w.label} · no attendance marked` : `${w.label} · ${w.pct}% · ${w.present}/${w.marked} present`}>
+                          <motion.i className={w.pct == null ? '' : w.pct >= 90 ? 'is-good' : w.pct >= 75 ? 'is-mid' : 'is-low'}
+                            initial={{ height: 4 }} animate={{ height: w.pct == null ? 4 : Math.max(6, Math.round(w.pct * 0.30)) }}
+                            transition={{ duration: 0.55, delay: i * 0.05, ease: EASE }} />
+                        </span>
+                      ))}
+                    </span>
+                    <span className="fx-xstrend-now">{row.last == null ? '—' : `${Math.round(row.last)}%`}</span>
+                    {row.delta != null
+                      ? <span className={`fx-trend-dir ${row.delta > 0 ? 'is-up' : row.delta < 0 ? 'is-down' : 'is-flat'}`}>
+                          {row.delta > 0 ? <ArrowUpRight size={12} /> : row.delta < 0 ? <ArrowDownRight size={12} /> : <Minus size={12} />}
+                          {Math.abs(row.delta).toFixed(1)}
+                        </span>
+                      : <span className="fx-trend-dir is-flat"><Minus size={12} />—</span>}
+                  </div>
+                ))}
+              </div>
+              <div className="fx-xstrend-axis" aria-hidden="true">
+                <span className="fx-xstrend-axis-inner">
+                  {xTrendWindow.map(w => <i key={w.start}>{w.label}</i>)}
+                </span>
+              </div>
+            </motion.div>
+ )}
 
           {/* RISK MATRIX (scatter) + SUBJECT LEADERSHIP */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}} className="two-col-charts">
@@ -430,8 +523,18 @@ export default function ChairpersonMultiSchool() {
                   </div>
                 )}
                 {messages.map((m,i) => (
-                  <div key={i} className={`ai-msg-premium ${m.role==='user'?'ai-msg-user-premium':'ai-msg-bot-premium'}`}>
+                  <div key={i} className={`ai-msg-premium ${m.role==='user'?'ai-msg-user-premium':'ai-msg-bot-premium'}${m.role==='bot'?' fx-ai-stream':''}`}>
                     {m.role==='bot'?<MarkdownLite text={m.content} />:m.content}
+                    {m.role==='bot' && (
+                      <div className="fx-ai-meta">
+                        <span className="fx-ai-time">{fmtTime(m.ts)}</span>
+                        <button type="button" className="fx-ai-copy" onClick={() => copyMsg(i, m.content)}
+                          title="Copy answer" aria-label="Copy answer">
+                          {copiedIdx===i ? <Check size={11} strokeWidth={2.6} /> : <Copy size={11} strokeWidth={2.4} />}
+                          {copiedIdx===i ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
                 {aiLoading && <div className="ai-msg-premium ai-msg-bot-premium"><ThinkingWave /></div>}
@@ -461,15 +564,21 @@ export default function ChairpersonMultiSchool() {
 }
 
 function SchoolInspect({ data }) {
+  // FIX (4-h): the inspect payload nests scalars under `summary` — the old
+  // code read data.total_classes/data.classes directly, so the Classes tile
+  // rendered the RAW class-object ARRAY → "Objects are not valid as a React
+  // child" crash on EVERY inspect open (pre-existing, surfaced via the new
+  // trend-row click). Subjects also expose `average`, not `average_pct`.
+  const s = data.summary || {};
   const grades = data.grades || [];
   const subjects = data.subjects || [];
   return (
     <div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:12,marginBottom:16}}>
-        <div className="kpi-tile"><div className="kpi-tile-label">Students</div><div className="kpi-tile-value">{data.total_students||data.students||'—'}</div></div>
-        <div className="kpi-tile"><div className="kpi-tile-label">Classes</div><div className="kpi-tile-value">{data.total_classes||data.classes||'—'}</div></div>
-        <div className="kpi-tile"><div className="kpi-tile-label">Avg</div><div className="kpi-tile-value" style={{color:gradeColor(data.school_average||data.average||0)}}>{fmt(data.school_average||data.average,1)}%</div></div>
-        <div className="kpi-tile"><div className="kpi-tile-label">At-Risk</div><div className="kpi-tile-value">{data.at_risk_count ?? '—'}</div></div>
+        <div className="kpi-tile"><div className="kpi-tile-label">Students</div><div className="kpi-tile-value">{s.students ?? data.total_students ?? '—'}</div></div>
+        <div className="kpi-tile"><div className="kpi-tile-label">Classes</div><div className="kpi-tile-value">{s.classes ?? data.total_classes ?? '—'}</div></div>
+        <div className="kpi-tile"><div className="kpi-tile-label">Avg</div><div className="kpi-tile-value" style={{color:gradeColor(s.average_pct ?? data.school_average ?? 0)}}>{fmt(s.average_pct ?? data.school_average,1)}%</div></div>
+        <div className="kpi-tile"><div className="kpi-tile-label">At-Risk</div><div className="kpi-tile-value">{s.at_risk_count ?? data.at_risk_count ?? '—'}</div></div>
       </div>
       {grades.length>0 && (
         <>
@@ -488,7 +597,7 @@ function SchoolInspect({ data }) {
           <div className="table-premium">
             <table>
               <thead><tr><th>Subject</th><th style={{textAlign:'center'}}>Avg</th><th style={{textAlign:'center'}}>Pass Rate</th></tr></thead>
-              <tbody>{subjects.map((s,i) => (<tr key={i}><td style={{fontWeight:600}}>{s.name}</td><td style={{textAlign:'center',fontWeight:700,color:gradeColor(s.average_pct||0)}}>{fmt(s.average_pct,1)}%</td><td style={{textAlign:'center'}}>{fmt(s.pass_rate,1)}%</td></tr>))}</tbody>
+              <tbody>{subjects.map((su,i) => (<tr key={i}><td style={{fontWeight:600}}>{su.name}</td><td style={{textAlign:'center',fontWeight:700,color:gradeColor(su.average_pct ?? su.average ?? 0)}}>{fmt(su.average_pct ?? su.average,1)}%</td><td style={{textAlign:'center'}}>{fmt(su.pass_rate,1)}%</td></tr>))}</tbody>
             </table>
           </div>
         </>

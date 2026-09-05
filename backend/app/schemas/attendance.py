@@ -1,10 +1,10 @@
 from pydantic import BaseModel
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 class AttendanceMark(BaseModel):
     student_id: int
-    status: str
+    status: Optional[str] = None  # null/empty ⇒ UNMARK (record deleted)
 
 class AttendanceBulkCreate(BaseModel):
     class_id: int

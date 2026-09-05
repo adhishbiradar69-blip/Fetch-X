@@ -15,7 +15,8 @@ from app.models.mark import Mark
 from app.models.subject import Subject
 from app.models.grade_subject import GradeSubject
 from app.models.exam import Exam
-from app.models.task import TaskCompletion
+from app.models.task import Task, TaskCompletion
+from app.models.teacher_assignment import TeacherAssignment
 from app.schemas.student import SchoolCreate, ClassCreate, StudentCreate
 from app.schemas.admin import (
     SubjectCreate, GradeSubjectAdd, ExamCreate, AccountCreate, AssignBody,
@@ -505,12 +506,52 @@ SUBJECTS_DEF = [
 # Subjects per grade band. 1-5 get 6 subjects, 6-10 get all 8.
 GRADES_1_5_SUBJECTS = ["Mathematics", "English", "Hindi", "Science", "General Knowledge", "Computer"]
 
+# Designer-specified house sections (Principal Dashboard: "10-Sapphire" etc.)
+SECTION_NAMES = ["Sapphire", "Emerald", "Ruby"]
+
+# The 6 core subjects that get a full teacher department (5 teachers each).
+# Index 0 of each subject department is the HOD.
+TEACHER_SUBJECT_NAMES = ["Mathematics", "Science", "English", "Hindi",
+                         "Social Science", "Computer"]
+TEACHERS_PER_SUBJECT = 5
+
+TEACHER_NAMES = [
+    "Priya Sharma", "Rahul Verma", "Anjali Mehta", "Suresh Iyer", "Kavitha Reddy",
+    "Deepak Joshi", "Meera Nair", "Arvind Gupta", "Lata Pillai", "Ramesh Rao",
+    "Neha Kulkarni", "Vikram Singh", "Shanti Devi", "Rajesh Menon", "Pooja Bhatt",
+    "Anil Kapoor", "Geeta Rao", "Mohit Jain", "Sunita Bose", "Kiran Desai",
+    "Farhan Khan", "Lakshmi Subramanian", "Harish Patel", "Divya Saxena", "Manoj Tiwari",
+    "Rekha Nambiar", "Sanjay Chopra", "Aarti Pandey", "Naveen Kumar", "Swati Mishra",
+]
+
+TASK_TITLES = [
+    "Chapter Review Worksheet", "Problem Set Practice", "Reading Comprehension",
+    "Science Lab Report", "Group Project Draft", "Essay Assignment",
+    "Quiz Preparation", "Practice Homework Sheet",
+]
+
+# Mild improvement trend: Term 3 >= Term 2 >= Term 1 on average.
+# Offsets are added to the gaussian draw (0-1 scale) BEFORE clamping.
+TERM_OFFSETS = {1: 0.00, 2: 0.03, 3: 0.06}
+
+# Attendance distribution: 88% present / 7% late / 5% absent.
+ATT_WEIGHTS = (0.88, 0.95)  # P if r < 0.88, L if r < 0.95, else A
+
+# Bulk-insert buffer threshold (rows) — keeps seed time sane on SQLite.
+BULK_BUFFER = 5000
+
 
 def _wipe_all(db: Session, keep_user_id: int):
-    """Delete every row except the calling super_admin account."""
+    """Delete every row except the calling super_admin account.
+
+    Order matters: child tables (TaskCompletion, TeacherAssignment, Mark,
+    Attendance) are wiped before their parents (Task, Student, Class, ...).
+    """
     db.query(Mark).delete()
     db.query(Attendance).delete()
     db.query(TaskCompletion).delete()
+    db.query(Task).delete()
+    db.query(TeacherAssignment).delete()
     db.query(Student).delete()
     db.query(Exam).delete()
     db.query(GradeSubject).delete()
@@ -525,7 +566,25 @@ def _wipe_all(db: Session, keep_user_id: int):
 
 @router.post("/seed-full")
 def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
-    """Idempotent-ish full seed. Wipes everything except the calling super_admin."""
+    """Full designer-spec seed. Wipes everything except the calling super_admin.
+
+    Per school (Greenwood High / Sunrise Public School / Radiant International
+    Academy):
+      - 30 classes: grades 1-10 x house sections Sapphire/Emerald/Ruby
+      - GradeSubjects: grades 1-5 -> 6 subjects, grades 6-10 -> all 8
+      - 30 students per class (900)
+      - 6 exams per grade: 2 per term x 3 terms ("Term 1".."Term 3"),
+        max_score 100 (Midterm) / 50 (Final) alternating
+      - Marks: student x grade-subjects x 6 exams, gaussian ~65% sigma 13
+        clamp 5-99 with +0%/+3%/+6% term offsets (T3 >= T2 >= T1 trend)
+      - Attendance: every school day (Mon-Fri) of the last 90 calendar days,
+        88% P / 7% L / 5% A, marked_by the class teacher
+      - 4 tasks per class + TaskCompletion rows (~70% completed)
+      - TeacherAssignment: 5 class_teacher users per core subject (6 -> 30),
+        index 0 = HOD, classes distributed round-robin (6 classes each);
+        class ci's CT post goes to teacher slot (ci % 5) of subject (ci % 6)
+      - 1 parent account linked to the first student of the first class
+    """
     _audit(user.email, "seed_full.start", note="wiping all data + reseeding")
     _wipe_all(db, keep_user_id=user.id)
 
@@ -545,11 +604,26 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
     # Build name -> id
     subject_id = {name: sub.id for name, sub in subject_objs.items()}
 
+    # School days (Mon-Fri) within the last 90 calendar days, chronological.
+    today = date.today()
+    school_days = []
+    for off in range(90):
+        d = today - timedelta(days=off)
+        if d.weekday() < 5:  # 0-4 = Mon-Fri
+            school_days.append(d)
+    school_days.reverse()
+    att_cut_1, att_cut_2 = ATT_WEIGHTS
+
     total_classes = 0
     total_students = 0
     total_exams = 0
     total_marks = 0
     total_attendance = 0
+    total_tasks = 0
+    total_task_completions = 0
+    total_teacher_assignments = 0
+    total_teachers = 0
+    total_parents = 0
     total_accounts = 0
 
     school_admins = []
@@ -557,11 +631,12 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
     first_class_id = None
 
     for school in schools:
-        # Build classes: grades 1-5 → 1 section (A); grades 6-10 → sections A,B
+        school_prefix = school.name.split()[0].lower()
+
+        # ── Classes: grades 1-10 x 3 house sections ─────────────────────────
         school_classes = []  # list of (class_obj, grade, section)
         for grade in range(1, 11):
-            sections = ["A", "B"] if grade >= 6 else ["A"]
-            for section in sections:
+            for section in SECTION_NAMES:
                 cls = Class(school_id=school.id, grade=grade, section=section)
                 db.add(cls)
                 school_classes.append((cls, grade, section))
@@ -570,7 +645,7 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
             first_class_id = school_classes[0][0].id
         total_classes += len(school_classes)
 
-        # GradeSubject: grades 1-5 get 6 subjects; grades 6-10 get all 8
+        # ── GradeSubject: grades 1-5 get 6 subjects; grades 6-10 get all 8 ──
         grade_subject_objs = []
         for grade in range(1, 11):
             subject_names = GRADES_1_5_SUBJECTS if grade <= 5 else list(subject_id.keys())
@@ -581,91 +656,53 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
         db.add_all(grade_subject_objs)
         db.flush()
 
-        # Exams for each grade: Midterm (max 100), Unit Test 1 (max 50)
-        school_exams = []  # (exam_obj, grade, max_score)
-        for grade in range(1, 11):
-            ex_mid = Exam(school_id=school.id, grade=grade, name="Midterm",
-                          max_score=100, term="Term 1")
-            ex_unit = Exam(school_id=school.id, grade=grade, name="Unit Test 1",
-                           max_score=50, term="Term 1")
-            db.add(ex_mid)
-            db.add(ex_unit)
-            school_exams.append((ex_mid, grade, 100))
-            school_exams.append((ex_unit, grade, 50))
-        db.flush()
-        total_exams += len(school_exams)
-
-        # Students per class — 25 with realistic Indian names
-        today = date.today()
-        mark_buf = []
-        att_buf = []
-        for (cls, grade, section) in school_classes:
-            # Grade subjects for this class
-            gs_subject_ids = []
-            if grade <= 5:
-                gs_subject_ids = [subject_id[n] for n in GRADES_1_5_SUBJECTS]
-            else:
-                gs_subject_ids = [subject_id[n] for n in subject_id.keys()]
-
-            # Exams for this grade
-            grade_exams = [(e, mx) for (e, g, mx) in school_exams if g == grade]
-
-            student_objs = []
-            for i in range(1, 26):
-                first = FIRST_NAMES[(total_students + i) % len(FIRST_NAMES)]
-                surname = SURNAMES[(total_students + i) % len(SURNAMES)]
-                name = f"{first} {surname}"
-                s = Student(name=name, roll_no=str(i), class_id=cls.id)
-                db.add(s)
-                student_objs.append(s)
+        # ── Teacher department: 5 class_teacher users per core subject ──────
+        teachers_by_subject = []  # index si -> list of 5 User objects
+        for si, sname in enumerate(TEACHER_SUBJECT_NAMES):
+            dept = []
+            for t in range(TEACHERS_PER_SUBJECT):
+                n = si * TEACHERS_PER_SUBJECT + t + 1
+                u = User(
+                    email=f"teacher{n}.{school_prefix}@schoolai.test",
+                    hashed_password=get_password_hash("teacher123"),
+                    full_name=TEACHER_NAMES[(si * TEACHERS_PER_SUBJECT + t) % len(TEACHER_NAMES)],
+                    role="class_teacher",
+                    school_id=school.id,
+                )
+                db.add(u)
+                dept.append(u)
+                total_accounts += 1
+                total_teachers += 1
             db.flush()
-            total_students += len(student_objs)
+            teachers_by_subject.append(dept)
+        db.flush()
 
-            # Marks: for each student, each subject, each exam → random
-            for s in student_objs:
-                for sid in gs_subject_ids:
-                    for (ex, mx) in grade_exams:
-                        # normal-ish around 65% with outliers
-                        # box-muller-ish via two randoms
-                        base = (random.gauss(0.65, 0.13))
-                        # clamp 0..1
-                        base = max(0.05, min(0.99, base))
-                        score = round(base * mx, 1)
-                        mark_buf.append(Mark(student_id=s.id, subject_id=sid,
-                                             exam_id=ex.id, score=score))
+        # TeacherAssignment: subject si covers every class, round-robin over
+        # its 5 teachers (teacher slot = ci % 5) -> each teacher teaches 6
+        # classes of exactly one subject; slot 0 is the HOD.
+        for si, sname in enumerate(TEACHER_SUBJECT_NAMES):
+            dept = teachers_by_subject[si]
+            for ci, (cls, _g, _s) in enumerate(school_classes):
+                db.add(TeacherAssignment(
+                    school_id=school.id,
+                    teacher_user_id=dept[ci % TEACHERS_PER_SUBJECT].id,
+                    subject_id=subject_id[sname],
+                    class_id=cls.id,
+                    is_hod=(ci % TEACHERS_PER_SUBJECT == 0),
+                ))
+        total_teacher_assignments += len(TEACHER_SUBJECT_NAMES) * len(school_classes)
+        db.flush()
 
-            # Attendance: 5 days per student, weighted toward P
-            att_choices = ["P", "P", "P", "P", "P", "P", "P", "A", "L", "A"]
-            for s in student_objs:
-                for d_off in range(5):
-                    day = today - timedelta(days=d_off + 1)
-                    status = random.choice(att_choices)
-                    att_buf.append(Attendance(student_id=s.id, date=day,
-                                              status=status, marked_by=user.id))
+        # Class-teacher posts: class ci -> teacher of subject (ci % 6), slot
+        # (ci % 5). Every class gets exactly one CT; every teacher ends with
+        # exactly one CT post.
+        for ci, (cls, _g, _s) in enumerate(school_classes):
+            teacher = teachers_by_subject[ci % len(TEACHER_SUBJECT_NAMES)][ci % TEACHERS_PER_SUBJECT]
+            cls.class_teacher_id = teacher.id
+            teacher.assigned_class_id = cls.id
+        db.flush()
 
-            # Commit periodically to avoid huge single transaction
-            if len(mark_buf) >= 800:
-                db.bulk_save_objects(mark_buf)
-                db.bulk_save_objects(att_buf)
-                db.commit()
-                total_marks += len(mark_buf)
-                total_attendance += len(att_buf)
-                mark_buf = []
-                att_buf = []
-
-        # flush remaining
-        if mark_buf or att_buf:
-            if mark_buf:
-                db.bulk_save_objects(mark_buf)
-                total_marks += len(mark_buf)
-            if att_buf:
-                db.bulk_save_objects(att_buf)
-                total_attendance += len(att_buf)
-            db.commit()
-
-        # Accounts for this school:
-        # school_admin -> assigned_class_id of first class
-        school_prefix = school.name.split()[0].lower()
+        # ── Accounts: school_admin + principal (existing behavior) ─────────
         sa_email = f"{school_prefix}@admin.test"
         sa_user = User(
             email=sa_email,
@@ -679,14 +716,19 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
         school_admins.append(sa_user)
         total_accounts += 1
 
-        # Assign sa_user as class_teacher of first class of this school
+        # school_admin also stays CT of the first class (kept behavior).
+        # The displaced teacher loses the CT post (but keeps teaching it).
         if school_classes:
             first_cls = school_classes[0][0]
+            prev_ct_id = first_cls.class_teacher_id
             first_cls.class_teacher_id = sa_user.id
             sa_user.assigned_class_id = first_cls.id
+            if prev_ct_id:
+                prev_teacher = db.query(User).filter(User.id == prev_ct_id).first()
+                if prev_teacher and prev_teacher.assigned_class_id == first_cls.id:
+                    prev_teacher.assigned_class_id = None
             db.commit()
 
-        # Principal account
         p_email = f"principal@{school_prefix}.test"
         p_user = User(
             email=p_email,
@@ -699,6 +741,149 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
         db.flush()
         principals.append(p_user)
         total_accounts += 1
+        db.commit()
+
+        # ── Exams: 6 per grade = 2 per term x 3 terms ───────────────────────
+        school_exams = []  # (exam_obj, grade, max_score, term_no)
+        for grade in range(1, 11):
+            for term_no in (1, 2, 3):
+                ex_mid = Exam(school_id=school.id, grade=grade,
+                              name=f"Term {term_no} Midterm",
+                              max_score=100, term=f"Term {term_no}")
+                ex_fin = Exam(school_id=school.id, grade=grade,
+                              name=f"Term {term_no} Final",
+                              max_score=50, term=f"Term {term_no}")
+                db.add(ex_mid)
+                db.add(ex_fin)
+                school_exams.append((ex_mid, grade, 100, term_no))
+                school_exams.append((ex_fin, grade, 50, term_no))
+        db.flush()
+        total_exams += len(school_exams)
+
+        # ── Students (30 per class) + Marks + Attendance ────────────────────
+        mark_buf = []
+        att_buf = []
+        class_students_map = {}
+        for (cls, grade, section) in school_classes:
+            gs_subject_ids = []
+            if grade <= 5:
+                gs_subject_ids = [subject_id[n] for n in GRADES_1_5_SUBJECTS]
+            else:
+                gs_subject_ids = [subject_id[n] for n in subject_id.keys()]
+
+            grade_exams = [(e, mx, tn) for (e, g, mx, tn) in school_exams if g == grade]
+            ct_id = cls.class_teacher_id
+
+            student_objs = []
+            for i in range(1, 31):
+                first = FIRST_NAMES[(total_students + i) % len(FIRST_NAMES)]
+                surname = SURNAMES[(total_students + i) % len(SURNAMES)]
+                name = f"{first} {surname}"
+                s = Student(name=name, roll_no=str(i), class_id=cls.id)
+                db.add(s)
+                student_objs.append(s)
+            db.flush()
+            total_students += len(student_objs)
+            class_students_map[cls.id] = student_objs
+
+            for s in student_objs:
+                # Marks: grade subjects x 6 exams, gaussian ~65% sigma 13,
+                # clamp 5-99, +3%/+6% term offsets before clamping.
+                for sid in gs_subject_ids:
+                    for (ex, mx, tn) in grade_exams:
+                        base = random.gauss(0.65, 0.13) + TERM_OFFSETS[tn]
+                        base = max(0.05, min(0.99, base))
+                        mark_buf.append(Mark(student_id=s.id, subject_id=sid,
+                                             exam_id=ex.id, score=round(base * mx, 1)))
+                # Attendance: every school day of the last 90 calendar days,
+                # 88% P / 7% L / 5% A, marked by the class teacher.
+                for day in school_days:
+                    r = random.random()
+                    status = "P" if r < att_cut_1 else ("L" if r < att_cut_2 else "A")
+                    att_buf.append(Attendance(student_id=s.id, date=day,
+                                              status=status, marked_by=ct_id))
+
+            if len(mark_buf) >= BULK_BUFFER or len(att_buf) >= BULK_BUFFER:
+                if mark_buf:
+                    db.bulk_save_objects(mark_buf)
+                    total_marks += len(mark_buf)
+                    mark_buf = []
+                if att_buf:
+                    db.bulk_save_objects(att_buf)
+                    total_attendance += len(att_buf)
+                    att_buf = []
+                db.commit()
+
+        if mark_buf or att_buf:
+            if mark_buf:
+                db.bulk_save_objects(mark_buf)
+                total_marks += len(mark_buf)
+                mark_buf = []
+            if att_buf:
+                db.bulk_save_objects(att_buf)
+                total_attendance += len(att_buf)
+                att_buf = []
+            db.commit()
+
+        # ── Tasks (4 per class) + TaskCompletion (~70% completed) ───────────
+        tc_buf = []
+        for ci, (cls, grade, _s) in enumerate(school_classes):
+            gs_subject_ids = []
+            if grade <= 5:
+                gs_subject_ids = [subject_id[n] for n in GRADES_1_5_SUBJECTS]
+            else:
+                gs_subject_ids = [subject_id[n] for n in subject_id.keys()]
+            students_of_class = class_students_map[cls.id]
+            new_tasks = []
+            for ti in range(4):
+                t = Task(
+                    title=TASK_TITLES[(ci * 4 + ti) % len(TASK_TITLES)],
+                    # rotate the subject index by class so all of the grade's
+                    # subjects get task data across the school
+                    subject_id=gs_subject_ids[(ti + ci) % len(gs_subject_ids)],
+                    due_date=today - timedelta(days=((ci * 4 + ti) % 30) + 1),
+                    assigned_by=cls.class_teacher_id,
+                    class_id=cls.id,
+                )
+                db.add(t)
+                new_tasks.append(t)
+            db.flush()
+            total_tasks += len(new_tasks)
+            for t in new_tasks:
+                for s in students_of_class:
+                    status = "completed" if random.random() < 0.7 else "pending"
+                    tc_buf.append(TaskCompletion(task_id=t.id, student_id=s.id,
+                                                 status=status))
+            if len(tc_buf) >= BULK_BUFFER:
+                db.bulk_save_objects(tc_buf)
+                total_task_completions += len(tc_buf)
+                tc_buf = []
+                db.commit()
+
+        if tc_buf:
+            db.bulk_save_objects(tc_buf)
+            total_task_completions += len(tc_buf)
+            tc_buf = []
+            db.commit()
+
+        # ── Parent account linked to first student of the first class ──────
+        parent_user = User(
+            email=f"parent@{school_prefix}.test",
+            hashed_password=get_password_hash("parent123"),
+            full_name=f"Parent ({school.name})",
+            role="parent",
+        )
+        db.add(parent_user)
+        db.flush()
+        total_accounts += 1
+        total_parents += 1
+        first_cls = school_classes[0][0]
+        first_student = (db.query(Student)
+                         .filter(Student.class_id == first_cls.id)
+                         .order_by(Student.id)
+                         .first())
+        if first_student:
+            first_student.parent_user_id = parent_user.id
         db.commit()
 
     # Chairperson — oversees all 3 schools
@@ -729,6 +914,11 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
         "exams": total_exams,
         "marks": total_marks,
         "attendance": total_attendance,
+        "tasks": total_tasks,
+        "task_completions": total_task_completions,
+        "teacher_assignments": total_teacher_assignments,
+        "teachers": total_teachers,
+        "parents": total_parents,
         "accounts": total_accounts,
         "school_admins": [u.email for u in school_admins],
         "principals": [u.email for u in principals],

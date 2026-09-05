@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+// Production (Vercel) sets VITE_API_URL to the backend origin.
+// In dev/preview we use the same-origin '/api' path, which the Vite dev
+// server proxies to the FastAPI backend (see vite.config.js).
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({ baseURL: API_URL });
 
@@ -18,9 +21,9 @@ api.interceptors.response.use(
     // Network errors (backend unreachable) — show a clear message
     if (!error.response) {
       console.error(
-        `[SchoolAI] Cannot reach backend at ${API_URL}. ` +
+        `[Fetch-X] Cannot reach backend at ${API_URL}. ` +
         `If this is a production deploy, set VITE_API_URL in Vercel to your backend URL. ` +
-        `If running locally, make sure the backend is running on port 8000.`
+        `If running locally, make sure the backend is running on port 8000 (the Vite proxy forwards /api to it).`
       );
     }
     if (error.response?.status === 401 || error.response?.status === 403) {

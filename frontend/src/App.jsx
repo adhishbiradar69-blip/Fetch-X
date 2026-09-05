@@ -18,17 +18,22 @@ import AdminDashboard from './pages/Admin/Dashboard';
 import AdminStudents from './pages/Admin/Students';
 import AccountCreation from './pages/Admin/Accounts';
 import PrincipalDashboard from './pages/Principal/Dashboard';
-import PrincipalStudents from './pages/Principal/Students';
-import PrincipalGrades from './pages/Principal/Grades';
-import PrincipalAtRisk from './pages/Principal/AtRisk';
-import PrincipalSubjects from './pages/Principal/Subjects';
-import PrincipalCompare from './pages/Principal/Compare';
 import ChairpersonMultiSchool from './pages/Chairperson/MultiSchool';
 import ChairpersonRankings from './pages/Chairperson/Rankings';
 import ChairpersonCompare from './pages/Chairperson/Compare';
 import ParentChildView from './pages/Parent/ChildView';
 
 const A = ['super_admin', 'school_admin', 'admin']; // admin roles
+
+/* Landing scroll-spy: in-page section id -> nav path highlighted while it's
+   in view (prototype's active-nav-on-scroll). Module-level so the prop
+   identity is stable across renders. */
+const LANDING_SPY = [
+  { id: 'home', to: '/' },
+  { id: 'about', to: '/about' },
+  { id: 'features', to: '/' },
+  { id: 'privacy', to: '/privacy' },
+];
 
 function ProtectedRoute({ children, roles }) {
   const { user, token } = useAuth();
@@ -41,11 +46,16 @@ function ProtectedRoute({ children, roles }) {
 }
 
 /* Landing route: shows Landing if NOT logged in, otherwise redirects to the
-   user's role-based home. */
+   user's role-based home. `flush` drops the shell's nav clearance — the hero
+   reserves its own (prototype geometry). */
 function LandingRoute() {
   const { user, token } = useAuth();
   if (token && user) return <Navigate to={homePathFor(user.role)} replace />;
-  return <PublicLayout><Landing /></PublicLayout>;
+  return (
+    <PublicLayout flush spy={LANDING_SPY}>
+      <Landing />
+    </PublicLayout>
+  );
 }
 
 /* Generic public-page wrapper — never blocks on auth. */
@@ -95,16 +105,15 @@ function AnimatedRoutes() {
             <ProtectedRoute roles={A}><AccountCreation /></ProtectedRoute>} />
           <Route path="/principal/dashboard" element={
             <ProtectedRoute roles={['principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
-          <Route path="/principal/students" element={
-            <ProtectedRoute roles={['principal', ...A]}><PrincipalStudents /></ProtectedRoute>} />
-          <Route path="/principal/grades" element={
-            <ProtectedRoute roles={['principal', ...A]}><PrincipalGrades /></ProtectedRoute>} />
-          <Route path="/principal/at-risk" element={
-            <ProtectedRoute roles={['principal', ...A]}><PrincipalAtRisk /></ProtectedRoute>} />
-          <Route path="/principal/subjects" element={
-            <ProtectedRoute roles={['principal', ...A]}><PrincipalSubjects /></ProtectedRoute>} />
-          <Route path="/principal/compare" element={
-            <ProtectedRoute roles={['principal', ...A]}><PrincipalCompare /></ProtectedRoute>} />
+          {/* v5 consolidation: the designer's principal section is ONE page —
+              every former sub-page lives inside the dashboard (sections +
+              modals). Old URLs land on the dashboard. */}
+          <Route path="/principal/students" element={<Navigate to="/principal/dashboard" replace />} />
+          <Route path="/principal/grades" element={<Navigate to="/principal/dashboard" replace />} />
+          <Route path="/principal/subjects" element={<Navigate to="/principal/dashboard" replace />} />
+          <Route path="/principal/at-risk" element={<Navigate to="/principal/dashboard" replace />} />
+          <Route path="/principal/attendance" element={<Navigate to="/principal/dashboard" replace />} />
+          <Route path="/principal/compare" element={<Navigate to="/principal/dashboard" replace />} />
           <Route path="/chairperson/dashboard" element={
             <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonMultiSchool /></ProtectedRoute>} />
           <Route path="/chairperson/rankings" element={

@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Award, TrendingUp, ChevronRight, Trophy } from 'lucide-react';
 import api from '../../api/client';
 import { Page } from '../../lib/motion.jsx';
+import { SkeletonPage } from '../../components/Skeleton.jsx';
 import { Toast, Modal } from '../../components/ui.jsx';
 
 const gradeColor = (avg) => avg >= 75 ? '#10b981' : avg >= 60 ? '#f59e0b' : avg >= 45 ? '#fb923c' : '#ef4444';
@@ -24,7 +25,7 @@ export default function ChairpersonRankings() {
     catch { showToast('Failed','error'); }
   };
 
-  if (loading) return <Page><div className="skeleton-card" style={{padding:80,textAlign:'center',color:'var(--text-muted)'}}>Loading rankings…</div></Page>;
+  if (loading) return <SkeletonPage eyebrowW={96} titleW={230} subW={380} stats={2} charts={0} rows={7} />;
   if (!rankings) return <Page><div className="empty-state-pro"><h3>No data</h3><p>Seed data first.</p></div></Page>;
 
   const byAvg = rankings.by_average || [];

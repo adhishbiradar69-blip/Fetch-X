@@ -1,121 +1,46 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
-/* SchoolAI theme system. Each theme overrides the CSS custom properties
-   defined in index.css. Switching is instant + persists to localStorage. */
+/* Fetch-X light/dark mode system (replaces the old 5-theme system).
+   Mode is a single `dark` class on <body>; index.css carries all
+   light values in :root and all dark overrides in body.dark.
+   Persists to localStorage key `fx-mode`, mirrored on <html data-mode>. */
 
-export const THEMES = [
-  { id: 'aurora',  name: 'Aurora',  swatch: 'linear-gradient(135deg,#4f7df3,#8b7cf6)', desc: 'Soft & calm' },
-  { id: 'emerald', name: 'Emerald', swatch: 'linear-gradient(135deg,#059669,#34d399)', desc: 'Growth' },
-  { id: 'sunset',  name: 'Sunset',  swatch: 'linear-gradient(135deg,#e85d75,#f0a04b)', desc: 'Warm' },
-  { id: 'slate',   name: 'Slate',   swatch: 'linear-gradient(135deg,#334155,#64748b)', desc: 'Pro neutral' },
-  { id: 'royal',   name: 'Royal',   swatch: 'linear-gradient(135deg,#7c3aed,#a855f7)', desc: 'Premium' },
-];
+const MODE_KEY = 'fx-mode';
+const ModeContext = createContext(null);
 
-const VARS = {
-  aurora: {
-    '--bg': '#faf8f5',
-    '--bg-gradient': 'linear-gradient(135deg,#f5f0ff 0%,#eef4ff 25%,#f0f9f6 50%,#fff8f0 75%,#faf5ff 100%)',
-    '--bg-card': 'rgba(255,255,255,0.72)',
-    '--bg-solid': '#ffffff',
-    '--border': 'rgba(200,210,230,0.5)',
-    '--border-strong': '#d8dde8',
-    '--text-primary': '#1a1f36',
-    '--text-secondary': '#5a6278',
-    '--text-muted': '#8a92a8',
-    '--accent': '#4f7df3',
-    '--accent-light': '#7aa2f7',
-    '--accent-glow': 'rgba(79,125,243,0.12)',
-    '--accent-gradient': 'linear-gradient(135deg,#4f7df3 0%,#6b8ef8 40%,#8b7cf6 100%)',
-  },
-  emerald: {
-    '--bg': '#f0fdf4',
-    '--bg-gradient': 'linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 50%,#f0fdfa 100%)',
-    '--bg-card': 'rgba(255,255,255,0.72)',
-    '--bg-solid': '#ffffff',
-    '--border': 'rgba(167,243,208,0.4)',
-    '--border-strong': '#bbf7d0',
-    '--text-primary': '#052e16',
-    '--text-secondary': '#166534',
-    '--text-muted': '#4b7c6a',
-    '--accent': '#059669',
-    '--accent-light': '#34d399',
-    '--accent-glow': 'rgba(5,150,105,0.12)',
-    '--accent-gradient': 'linear-gradient(135deg,#059669 0%,#10b981 50%,#34d399 100%)',
-  },
-  sunset: {
-    '--bg': '#fff7ed',
-    '--bg-gradient': 'linear-gradient(135deg,#fff7ed 0%,#fef2f2 50%,#fdf4ff 100%)',
-    '--bg-card': 'rgba(255,255,255,0.72)',
-    '--bg-solid': '#ffffff',
-    '--border': 'rgba(251,213,170,0.4)',
-    '--border-strong': '#fed7aa',
-    '--text-primary': '#431407',
-    '--text-secondary': '#9a3412',
-    '--text-muted': '#c2725a',
-    '--accent': '#e85d75',
-    '--accent-light': '#f4a3b0',
-    '--accent-glow': 'rgba(232,93,117,0.12)',
-    '--accent-gradient': 'linear-gradient(135deg,#e85d75 0%,#f0a04b 100%)',
-  },
-  slate: {
-    '--bg': '#f8fafc',
-    '--bg-gradient': 'linear-gradient(135deg,#f8fafc 0%,#f1f5f9 50%,#e2e8f0 100%)',
-    '--bg-card': 'rgba(255,255,255,0.78)',
-    '--bg-solid': '#ffffff',
-    '--border': 'rgba(203,213,225,0.5)',
-    '--border-strong': '#cbd5e1',
-    '--text-primary': '#0f172a',
-    '--text-secondary': '#475569',
-    '--text-muted': '#94a3b8',
-    '--accent': '#334155',
-    '--accent-light': '#64748b',
-    '--accent-glow': 'rgba(51,65,85,0.1)',
-    '--accent-gradient': 'linear-gradient(135deg,#334155 0%,#475569 50%,#64748b 100%)',
-  },
-  royal: {
-    '--bg': '#faf5ff',
-    '--bg-gradient': 'linear-gradient(135deg,#faf5ff 0%,#f5f3ff 50%,#eef2ff 100%)',
-    '--bg-card': 'rgba(255,255,255,0.72)',
-    '--bg-solid': '#ffffff',
-    '--border': 'rgba(216,180,254,0.4)',
-    '--border-strong': '#d8b4fe',
-    '--text-primary': '#2e1065',
-    '--text-secondary': '#6b21a8',
-    '--text-muted': '#9379c4',
-    '--accent': '#7c3aed',
-    '--accent-light': '#a855f7',
-    '--accent-glow': 'rgba(124,58,237,0.12)',
-    '--accent-gradient': 'linear-gradient(135deg,#7c3aed 0%,#a855f7 50%,#c084fc 100%)',
-  },
-};
-
-const ThemeContext = createContext(null);
+function readInitialMode() {
+  try {
+    // The old 5-theme system stored its key here — remove it so stale
+    // preferences never come back.
+    localStorage.removeItem('schoolai-theme');
+    const stored = localStorage.getItem(MODE_KEY);
+    if (stored === 'dark' || stored === 'light') return stored;
+  } catch { /* storage unavailable */ }
+  if (typeof window !== 'undefined' && window.matchMedia &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+  return 'light';
+}
 
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem('schoolai-theme') || 'aurora');
+  const [mode, setMode] = useState(readInitialMode);
 
   useEffect(() => {
-    // Coerce any persisted-but-removed theme (e.g. one that was deprecated)
-    // back to 'aurora' so users never end up on a missing theme.
-    const safeTheme = VARS[theme] ? theme : 'aurora';
-    if (safeTheme !== theme) {
-      setTheme(safeTheme);
-      return;
-    }
-    const vars = VARS[theme] || VARS.aurora;
-    const root = document.documentElement;
-    Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v));
-    root.setAttribute('data-theme', theme);
-    localStorage.setItem('schoolai-theme', theme);
-  }, [theme]);
+    const dark = mode === 'dark';
+    document.body.classList.toggle('dark', dark);
+    document.documentElement.setAttribute('data-mode', mode);
+    try { localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ }
+  }, [mode]);
+
+  const toggle = () => setMode((m) => (m === 'dark' ? 'light' : 'dark'));
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, themes: THEMES }}>
+    <ModeContext.Provider value={{ mode, setMode, toggle }}>
       {children}
-    </ThemeContext.Provider>
+    </ModeContext.Provider>
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- useTheme is the public hook API; splitting it into another file would break every existing import path
 export function useTheme() {
-  return useContext(ThemeContext);
+  return useContext(ModeContext);
 }

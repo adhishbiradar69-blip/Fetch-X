@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Logo } from './Logo.jsx';
 
-/* Shows a thin branded progress bar at the top of the viewport whenever
-   `loading` is true. Used during route transitions + data fetches. */
+/* Thin branded progress bar at the top of the viewport whenever `loading`
+   is true. Used during route transitions + data fetches. */
 export function PageProgress({ loading }) {
   return (
     <AnimatePresence>
@@ -11,7 +11,7 @@ export function PageProgress({ loading }) {
         <motion.div
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, height: 3, zIndex: 9999,
-            background: 'linear-gradient(90deg,#4f7df3,#8b7cf6,#4f7df3)',
+            background: 'linear-gradient(90deg,#8678f9,#5b4fe9,#8678f9)',
             backgroundSize: '200% 100%',
           }}
           initial={{ scaleX: 0, opacity: 0, transformOrigin: 'left' }}
@@ -25,8 +25,7 @@ export function PageProgress({ loading }) {
   );
 }
 
-/* Full-route branded loader — logo + shimmer wordmark + dots.
-   Renders for `ms` milliseconds on mount, then calls onDone. */
+/* Full-route branded loader — Fetch-X logo + pulsing dots on the page color. */
 export function RouteLoader({ ms = 650, onDone }) {
   useEffect(() => {
     const t = setTimeout(onDone, ms);
@@ -35,7 +34,7 @@ export function RouteLoader({ ms = 650, onDone }) {
   return (
     <motion.div
       style={{ position: 'fixed', inset: 0, zIndex: 9998, display: 'flex',
-        alignItems: 'center', justifyContent: 'center', background: 'var(--bg, #faf8f5)' }}
+        alignItems: 'center', justifyContent: 'center', background: 'var(--page, #ffffff)' }}
       initial={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18 }}>
         <motion.div initial={{ scale: 0.7, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
@@ -47,7 +46,7 @@ export function RouteLoader({ ms = 650, onDone }) {
             <motion.span key={i}
               animate={{ opacity: [0.25, 1, 0.25], y: [0, -3, 0] }}
               transition={{ duration: 1, repeat: Infinity, delay: i * 0.16, ease: 'easeInOut' }}
-              style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent, #4f7df3)' }} />
+              style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--brand, #5b4fe9)' }} />
           ))}
         </div>
       </div>
@@ -55,13 +54,18 @@ export function RouteLoader({ ms = 650, onDone }) {
   );
 }
 
-/* Hook: returns true for `ms` after `key` changes — drives the RouteLoader. */
+/* Hook: returns true for `ms` after `key` changes — drives the RouteLoader.
+   Restarts the loading window by adjusting state during render (React's
+   documented derived-state pattern) instead of setState inside an effect. */
+// eslint-disable-next-line react-refresh/only-export-components -- this hook ships with the loader components it drives; splitting the file would break App.jsx imports
 export function useRouteTransition(key, ms = 650) {
-  const [loading, setLoading] = useState(false);
+  const [lastKey, setLastKey] = useState(key);
+  const [loading, setLoading] = useState(true);
+  if (lastKey !== key) { setLastKey(key); setLoading(true); }
   useEffect(() => {
-    setLoading(true);
+    if (!loading) return undefined;
     const t = setTimeout(() => setLoading(false), ms);
     return () => clearTimeout(t);
-  }, [key, ms]);
+  }, [loading, ms, lastKey]);
   return loading;
 }

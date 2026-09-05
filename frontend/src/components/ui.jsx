@@ -34,7 +34,8 @@ export function CountUp({ value = 0, decimals = 0, duration = 0.9, className, st
   return <span className={className} style={style}>{text}</span>;
 }
 
-/* Toast with a shrinking progress bar + swipe-to-dismiss. */
+/* Toast with a shrinking progress bar + swipe-to-dismiss.
+   Flat tints on a hard-offset-shadow card (design system). */
 export function Toast({ message, type = 'success', onClose, duration = 2600 }) {
   useEffect(() => {
     const t = setTimeout(onClose, duration);
@@ -42,10 +43,10 @@ export function Toast({ message, type = 'success', onClose, duration = 2600 }) {
   }, [onClose, duration]);
 
   const colors = {
-    success: { bg: 'linear-gradient(135deg,#d4f5e9,#a8e6d3)', color: '#0d7a5e', Icon: CheckCircle2 },
-    error: { bg: 'linear-gradient(135deg,#fce4e8,#f9c4cc)', color: '#b0304a', Icon: XCircle },
-    info: { bg: 'linear-gradient(135deg,#dbeafe,#bfdbfe)', color: '#1e40af', Icon: Info },
-  }[type] || { bg: '#f0eeea', color: '#5a5a5a', Icon: Info };
+    success: { bg: '#e3f5ed', color: '#0b7a5c', Icon: CheckCircle2 },
+    error: { bg: '#fdeaea', color: '#b91c1c', Icon: XCircle },
+    info: { bg: '#ece8fc', color: '#4f42dd', Icon: Info },
+  }[type] || { bg: '#f3f3f9', color: '#4b4a6b', Icon: Info };
 
   return (
     <div className="toast-host">
@@ -88,7 +89,8 @@ export function ToastHost({ toast, onClose }) {
   );
 }
 
-/* Modal with backdrop fade + spring scale. */
+/* Modal with backdrop fade + spring scale. Visual styling (radius 16,
+   hard offset shadow) lives in .modal-content/.modal-pro CSS. */
 export function Modal({ open, onClose, children, title, wide }) {
   return (
     <AnimatePresence>
@@ -124,9 +126,10 @@ export function Modal({ open, onClose, children, title, wide }) {
 }
 
 /* Lightweight ripple button — tap scale + shimmer sweep already in .btn. */
+// eslint-disable-next-line react-refresh/only-export-components -- MotionBtn is a styled-primitive re-export, not a component file split
 export const MotionBtn = motion.button;
 
-/* Confetti-ish success burst (CSS-only, cheap). */
+/* Success burst — brand indigo pulse (CSS-only, cheap). */
 export function SuccessBurst({ show }) {
   return (
     <AnimatePresence>

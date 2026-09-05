@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   TrendingUp, Building2, Library, GraduationCap, Palette, PenLine, Link2,
-  Zap, Sprout, Plus, Check, KeyRound,
+  Zap, Sprout, Plus, Check, KeyRound, ArrowRight,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useAuth } from '../../auth/AuthContext';
-import { Page, EASE, SPRING, staggerContainer, staggerItem, statHover } from '../../lib/motion.jsx';
+import { Page, EASE, staggerContainer, staggerItem } from '../../lib/motion.jsx';
 import { CountUp, Toast } from '../../components/ui.jsx';
 
 const TABS = [
@@ -56,22 +56,22 @@ export default function AdminDashboard() {
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <div className="page-header">
-        <h2>Admin Dashboard</h2>
-        <p>Manage schools, classes, students, subjects, exams & accounts</p>
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow">Fetch-X · School Administration</div>
+          <h1>Admin Dashboard</h1>
+          <div className="subtitle">Manage schools, classes, students, subjects, exams &amp; accounts</div>
+        </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="admin-tabs">
+      {/* Tab bar — Fetch-X pill tabs */}
+      <div className="grade-tabs" style={{ marginBottom: 20 }}>
         {visibleTabs.map(t => {
           const TabIcon = t.Icon;
           return (
-            <button key={t.id} className={`admin-tab ${tab === t.id ? 'active' : ''}`}
+            <button key={t.id} className={`gtab ${tab === t.id ? 'active' : ''}`}
               onClick={() => setTab(t.id)}>
-              {tab === t.id && (
-                <motion.span layoutId="tab-pill" className="tab-pill" transition={SPRING} />
-              )}
-              <span className="tab-icon"><TabIcon size={16} strokeWidth={2.2} /></span>
+              <span className="tab-icon"><TabIcon size={13} strokeWidth={2.4} /></span>
               <span>{t.label}</span>
             </button>
           );
@@ -104,10 +104,10 @@ function Overview({ schools, classes, subjects, accounts, user, onDone, showToas
   const isSuperAdmin = user?.role === 'super_admin';
 
   const stats = [
-    { label: 'Schools', value: schools.length, Icon: Building2, color: '#6366f1', bg: 'linear-gradient(135deg,#e0e7ff,#c7d2fe)' },
-    { label: 'Classes', value: classes.length, Icon: Library, color: '#10b981', bg: 'linear-gradient(135deg,#d1fae5,#a7f3d0)' },
-    { label: 'Subjects', value: subjects.length, Icon: Palette, color: '#f59e0b', bg: 'linear-gradient(135deg,#fef3c7,#fde68a)' },
-    { label: 'Accounts', value: accounts.length, Icon: KeyRound, color: '#8b5cf6', bg: 'linear-gradient(135deg,#ede9fe,#ddd6fe)' },
+    { label: 'Schools', value: schools.length, Icon: Building2, accent: 'a-indigo' },
+    { label: 'Classes', value: classes.length, Icon: Library, accent: 'a-teal' },
+    { label: 'Subjects', value: subjects.length, Icon: Palette, accent: 'a-amber' },
+    { label: 'Accounts', value: accounts.length, Icon: KeyRound, accent: 'a-pink' },
   ];
 
   const seedFull = async () => {
@@ -137,56 +137,46 @@ function Overview({ schools, classes, subjects, accounts, user, onDone, showToas
 
   return (
     <>
-      <motion.div variants={staggerContainer} initial="initial" animate="animate" className="stat-grid">
-        {stats.map(s => {
-          const SIcon = s.Icon;
-          return (
-            <motion.div key={s.label} variants={staggerItem} className="stat-card" {...statHover}>
-              <div className="stat-icon" style={{ background: s.bg, color: s.color }}>
-                <SIcon size={22} strokeWidth={2.2} />
-              </div>
-              <div style={{ fontSize: 36, fontWeight: 800, color: s.color, letterSpacing: '-1px' }}>
-                <CountUp value={s.value} />
-              </div>
-              <div className="stat-label">{s.label}</div>
-            </motion.div>
-          );
-        })}
+      <motion.div variants={staggerContainer} initial="initial" animate="animate" className="card" style={{ marginTop: 4 }}>
+        <div className="card-stats cols-4">
+          {stats.map(s => {
+            const SIcon = s.Icon;
+            return (
+              <motion.div key={s.label} variants={staggerItem} className={`stat-cell ${s.accent}`}>
+                <div className="ic"><SIcon size={16} strokeWidth={2.2} /></div>
+                <div>
+                  <div className="k">{s.label}</div>
+                  <div className="v"><CountUp value={s.value} /></div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
       </motion.div>
 
       <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.25, duration: 0.4, ease: EASE }}
-        className="glass" style={{ padding: 28, marginTop: 24, textAlign: 'center' }}>
-        <h3 className="section-title" style={{ marginBottom: 4, justifyContent: 'center' }}>
-          <Zap size={18} color="var(--accent)" /> Quick Setup
+        className="card" style={{ padding: 26, marginTop: 24, textAlign: 'center' }}>
+        <h3 className="section-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <Zap size={18} color="var(--brand)" /> Quick Setup
         </h3>
-        <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap', marginTop: 18 }}>
+        <div style={{ display: 'flex', gap: 14, justifyContent: 'center', flexWrap: 'wrap', marginTop: 18 }}>
           {isSuperAdmin && (
             <motion.button type="button" onClick={seedFull} disabled={seedingFull}
               whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }}
-              animate={seedingFull ? { opacity: 0.85 } : { boxShadow: ['0 4px 20px rgba(79,125,243,0.3)', '0 8px 28px rgba(79,125,243,0.5)', '0 4px 20px rgba(79,125,243,0.3)'] }}
-              transition={seedingFull ? { duration: 0.2 } : { duration: 2, repeat: Infinity }}
-              style={{
-                background: 'linear-gradient(135deg,#4f7df3,#6366f1)', color: '#fff', border: 'none',
-                borderRadius: 12, padding: '16px 28px', fontSize: 16, fontWeight: 700,
-                cursor: seedingFull ? 'wait' : 'pointer', display: 'inline-flex',
-                alignItems: 'center', gap: 10, minWidth: 250,
-              }}>
+              className="btn btn-primary"
+              style={{ minWidth: 250, cursor: seedingFull ? 'wait' : 'pointer' }}>
               {seedingFull ? <><Spinner /> Seeding…</> : <><Sprout size={18} /> Seed Full Demo Data</>}
             </motion.button>
           )}
           <motion.button type="button" onClick={seedBasic} disabled={seedingBasic}
             whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }}
-            style={{
-              background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', border: 'none',
-              borderRadius: 12, padding: '16px 28px', fontSize: 16, fontWeight: 700,
-              cursor: seedingBasic ? 'wait' : 'pointer', display: 'inline-flex',
-              alignItems: 'center', gap: 10, minWidth: 250,
-            }}>
+            className="btn btn-ghost"
+            style={{ minWidth: 250, cursor: seedingBasic ? 'wait' : 'pointer' }}>
             {seedingBasic ? <><Spinner /> Seeding…</> : <><Sprout size={18} /> Seed Basic (Greenwood)</>}
           </motion.button>
         </div>
-        <div style={{ marginTop: 14, fontSize: 13, color: 'var(--text-secondary)' }}>
+        <div style={{ marginTop: 14, fontSize: 13, color: 'var(--body-text)' }}>
           Quickly populate the database with realistic demo data across 3 schools.
         </div>
       </motion.div>
@@ -205,7 +195,7 @@ function SchoolsTab({ schools, onDone, showToast, user }) {
   };
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="glass" style={{ padding: 24, marginBottom: 24 }}>
+      <div className="card" style={{ padding: 22, marginBottom: 24 }}>
         <h3 className="section-title">Add School</h3>
         <form onSubmit={submit} style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <input className="input" style={{ flex: 1, minWidth: 220 }} placeholder="School name (e.g. Greenwood High)"
@@ -259,7 +249,7 @@ function ClassesTab({ schools, classes, accounts, onDone, showToast, user }) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="glass" style={{ padding: 24, marginBottom: 24 }}>
+      <div className="card" style={{ padding: 22, marginBottom: 24 }}>
         <h3 className="section-title">Add Class</h3>
         <form onSubmit={submit} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <Field label="School"><select className="input" value={schoolId} onChange={e => setSchoolId(e.target.value)} disabled={isSchoolAdmin}>
@@ -283,12 +273,10 @@ function ClassesTab({ schools, classes, accounts, onDone, showToast, user }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span className="list-icon"><Library size={18} color="var(--accent)" /></span>
                 <span style={{ fontWeight: 700 }}>{c.label}</span>
-                <span className="pill" style={{ background: '#e0e7ff', color: '#4f7df3', fontSize: 11 }}>
+                <span className="pill-tag">
                   {schools.find(s => s.id === c.school_id)?.name || `School #${c.school_id}`}
                 </span>
-                {c.class_teacher && <span className="pill" style={{ background: '#d1fae5', color: '#059669', fontSize: 11 }}>
-                  {c.class_teacher.name}
-                </span>}
+                {c.class_teacher && <span className="teach-pill"><b>{c.class_teacher.name}</b></span>}
               </div>
               <select className="input input-sm" defaultValue={c.class_teacher?.id || ''}
                 onChange={e => assignTeacher(c.id, e.target.value)}>
@@ -343,7 +331,7 @@ function StudentsTab({ schools, classes, onDone, showToast, user }) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="glass" style={{ padding: 24, marginBottom: 24 }}>
+      <div className="card" style={{ padding: 22, marginBottom: 24 }}>
         <h3 className="section-title">Add Student</h3>
         <form onSubmit={submit} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <Field label="School"><select className="input" value={schoolId} onChange={e => setSchoolId(e.target.value)} disabled={isSchoolAdmin}>
@@ -430,7 +418,7 @@ function SubjectsTab({ subjects, schools, onDone, showToast, user }) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }} className="subjects-grid">
-        <div className="glass" style={{ padding: 24 }}>
+        <div className="card" style={{ padding: 22 }}>
           <h3 className="section-title">Create Subject</h3>
           <form onSubmit={createSubject} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <input className="input" placeholder="Subject name" value={name} onChange={e => setName(e.target.value)} required />
@@ -451,7 +439,7 @@ function SubjectsTab({ subjects, schools, onDone, showToast, user }) {
           </div>
         </div>
 
-        <div className="glass" style={{ padding: 24 }}>
+        <div className="card" style={{ padding: 22 }}>
           <h3 className="section-title">Subjects per Grade</h3>
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
             <select className="input" value={schoolId} onChange={e => setSchoolId(e.target.value)} disabled={isSchoolAdmin}>
@@ -461,12 +449,12 @@ function SubjectsTab({ subjects, schools, onDone, showToast, user }) {
               {grades.map(g => <option key={g} value={g}>Grade {g}</option>)}
             </select>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, marginBottom: 16, flexWrap: 'wrap', padding: '12px 14px', background: 'rgba(99,102,241,0.06)', borderRadius: 10, border: '1px dashed rgba(99,102,241,0.35)' }}>
+          <div className="assign-block" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, marginBottom: 16, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>Apply subjects to grade range:</span>
             <select className="input input-sm" value={gradeFrom} onChange={e => setGradeFrom(e.target.value)} style={{ width: 90 }}>
               {grades.map(g => <option key={g} value={g}>Grade {g}</option>)}
             </select>
-            <span style={{ fontWeight: 700, color: '#6366f1' }}>→</span>
+            <ArrowRight size={15} color="var(--brand)" />
             <select className="input input-sm" value={gradeTo} onChange={e => setGradeTo(e.target.value)} style={{ width: 90 }}>
               {grades.map(g => <option key={g} value={g}>Grade {g}</option>)}
             </select>
@@ -536,7 +524,7 @@ function ExamsTab({ schools, onDone, showToast, user }) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="glass" style={{ padding: 24, marginBottom: 24 }}>
+      <div className="card" style={{ padding: 22, marginBottom: 24 }}>
         <h3 className="section-title">Create Exam</h3>
         <form onSubmit={submit} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <Field label="School"><select className="input" value={schoolId} onChange={e => setSchoolId(e.target.value)} disabled={isSchoolAdmin}>
@@ -556,8 +544,8 @@ function ExamsTab({ schools, onDone, showToast, user }) {
               {grades.map(g => <option key={g} value={g}>Grade {g}</option>)}
             </select></Field>
           )}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)', paddingBottom: 10, cursor: 'pointer' }}>
-            <input type="checkbox" checked={useRange} onChange={e => setUseRange(e.target.checked)} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--body-text)', paddingBottom: 10, cursor: 'pointer' }}>
+            <input type="checkbox" checked={useRange} onChange={e => setUseRange(e.target.checked)} style={{ accentColor: '#5b4fe9' }} />
             Create for grade range
           </label>
           <Field label="Exam name"><input className="input" placeholder="e.g. Midterm" value={name} onChange={e => setName(e.target.value)} required /></Field>
@@ -573,8 +561,8 @@ function ExamsTab({ schools, onDone, showToast, user }) {
               initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03, ease: EASE }} whileHover={{ scale: 1.02 }}>
               <span className="list-icon"><PenLine size={18} color="var(--accent)" /></span>
               <span style={{ fontWeight: 700 }}>{e.name}</span>
-              <span className="pill" style={{ background: '#fef3c7', color: '#d97706', fontSize: 11 }}>Grade {e.grade}</span>
-              <span className="pill" style={{ background: '#dbeafe', color: '#1e40af', fontSize: 11 }}>Max {e.max_score}</span>
+              <span className="pill-tag">Grade {e.grade}</span>
+              <span className="pill-tag">Max {e.max_score}</span>
               {e.term && <span className="list-id">{e.term}</span>}
             </motion.div>
           ))}
@@ -607,7 +595,7 @@ function AssignmentsTab({ schools, classes, accounts, onDone, showToast, user })
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'grid', gap: 24, gridTemplateColumns: '1fr 1fr' }} className="assign-grid">
-      <div className="glass" style={{ padding: 24 }}>
+      <div className="card" style={{ padding: 22 }}>
         <h3 className="section-title">Assign Principal → School</h3>
         <div className="admin-list">
           {schools.map(s => {
@@ -630,7 +618,7 @@ function AssignmentsTab({ schools, classes, accounts, onDone, showToast, user })
         </div>
       </div>
 
-      <div className="glass" style={{ padding: 24 }}>
+      <div className="card" style={{ padding: 22 }}>
         <h3 className="section-title">Assign Chairperson → Schools</h3>
         {!chairpersons.length
           ? <div className="empty-mini">No chairperson accounts yet. Create one in Accounts.</div>

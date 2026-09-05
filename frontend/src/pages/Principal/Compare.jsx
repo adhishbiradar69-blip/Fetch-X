@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from 'recharts';
-import { GitCompare, Plus, X, ChevronRight, Users, BookOpen } from 'lucide-react';
+import { GitCompare, Plus, X, Users, BookOpen, Search, RotateCcw } from 'lucide-react';
 import api from '../../api/client';
-import { Page, EASE } from '../../lib/motion.jsx';
+import { Page } from '../../lib/motion.jsx';
+import { SkeletonPage } from '../../components/Skeleton.jsx';
 import { Toast } from '../../components/ui.jsx';
 
 const COLORS = ['#4f7df3', '#34bfa1', '#f0a04b', '#8b5cf6', '#e85d75', '#0ea5e9'];
@@ -19,17 +20,40 @@ export default function PrincipalCompare() {
   const [loading, setLoading] = useState(true);
   const [comparing, setComparing] = useState(false);
   const [toast, setToast] = useState(null);
+  /* picker search: classes filter client-side; students ALSO search server-side
+     (debounced) so any of the school's students is reachable — not just the
+     top-N the picker preloads. */
+  const [query, setQuery] = useState('');
+  const [serverHits, setServerHits] = useState(null); // students found by server search
+  const [searching, setSearching] = useState(false);
+  const [totalStudents, setTotalStudents] = useState(0);
   const showToast = (m, t='success') => { setToast({message:m,type:t}); setTimeout(()=>setToast(null),2600); };
 
   useEffect(() => {
     Promise.all([
       api.get('/principal/classes/compare'),
-      api.get('/principal/students?limit=100'),
+      api.get('/principal/students?page_size=200'),
     ]).then(([c, s]) => {
       setClasses(c.data);
       setStudents(s.data.students);
+      setTotalStudents(s.data.total ?? s.data.students.length);
     }).catch(e => { console.error(e); showToast('Failed to load','error'); }).finally(()=>setLoading(false));
   }, []);
+
+  /* debounced server search (students mode) — backend filters the WHOLE school.
+     No sync setState here: staleness is handled at render time. */
+  useEffect(() => {
+    const q = query.trim();
+    if (mode !== 'students' || q.length < 2) return undefined;
+    const t = setTimeout(() => {
+      setSearching(true);
+      api.get(`/principal/students?search=${encodeURIComponent(q)}&page_size=200`)
+        .then(r => setServerHits(r.data.students))
+        .catch(() => setServerHits(null))
+        .finally(() => setSearching(false));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query, mode]);
 
   const toggleSelect = (item) => {
     const exists = selected.find(s => s.id === item.id);
@@ -57,26 +81,54 @@ export default function PrincipalCompare() {
     setComparing(false);
   };
 
-  if (loading) return <Page><div className="skeleton-card" style={{padding:80,textAlign:'center',color:'var(--text-muted)'}}>Loading…</div></Page>;
+  if (loading) return <SkeletonPage eyebrowW={96} titleW={250} subW={400} stats={3} charts={1} rows={4} />;
 
-  const items = mode === 'classes' ? classes.map(c => ({id: c.class_id, name: c.label, label: c.label})) : students.map(s => ({id: s.student_id, name: s.name, label: s.class_label}));
+  const q = query.trim().toLowerCase();
+  /* students list: server hits (searches the WHOLE school) win only while a
+     live query is active; otherwise the preloaded top-200, filtered client-side */
+  const searchLive = mode === 'students' && query.trim().length >= 2;
+  const studentPool = (searchLive && serverHits) ? serverHits : students;
+  const items = (mode === 'classes'
+    ? classes.map(c => ({id: c.class_id, name: c.label, label: c.label}))
+    : studentPool.map(s => ({id: s.student_id, name: s.name, label: s.class_label})))
+    .filter(it => !q || it.name.toLowerCase().includes(q) || (it.label || '').toLowerCase().includes(q));
+  const shown = items.slice(0, 50);
 
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}
-      <div className="page-header-pro">
-        <div className="breadcrumb"><a href="/principal/dashboard">Dashboard</a> / Compare</div>
-        <h2>Comparison Tool</h2>
-        <p>Select 2-4 {mode} to compare side-by-side with charts and tables</p>
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow"><a href="/principal/dashboard">Dashboard</a> / Compare</div>
+          <h1>Comparison Tool</h1>
+          <div className="subtitle">Select 2-4 {mode} to compare side-by-side with charts and tables</div>
+        </div>
       </div>
 
       <div className="filter-bar-premium">
-        <div style={{display:'flex',gap:8}}>
-          <button className={`btn ${mode==='classes'?'btn-primary':'btn-secondary'}`} onClick={()=>{setMode('classes');setSelected([]);setCompareData(null);}}><BookOpen size={14} style={{marginRight:6}} />Classes</button>
-          <button className={`btn ${mode==='students'?'btn-primary':'btn-secondary'}`} onClick={()=>{setMode('students');setSelected([]);setCompareData(null);}}><Users size={14} style={{marginRight:6}} />Students</button>
+        <div style={{display:'flex',gap:6}}>
+          <button className={`gtab ${mode==='classes'?'active':''}`} onClick={()=>{setMode('classes');setSelected([]);setCompareData(null);setQuery('');}}><BookOpen size={13} />Classes</button>
+          <button className={`gtab ${mode==='students'?'active':''}`} onClick={()=>{setMode('students');setSelected([]);setCompareData(null);setQuery('');}}><Users size={13} />Students</button>
+        </div>
+        <div className="fx-picker-search" style={{flex:1, maxWidth:340, minWidth:160}}>
+          <Search size={14} className="fx-picker-search-ic" />
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={mode === 'students' ? `Search all ${totalStudents} students…` : 'Search classes…'}
+            aria-label={`Search ${mode} to compare`}
+          />
+          {query && (
+            <button type="button" className="fx-picker-search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+              <RotateCcw size={12} />
+            </button>
+          )}
+          {searching && <span className="fx-picker-search-spin" />}
         </div>
         <div style={{flex:1}}></div>
-        <span style={{fontSize:13,color:'var(--text-muted)'}}>{selected.length}/4 selected</span>
+        <span style={{fontSize:13,color:'var(--text-muted)'}}>
+          {q ? `${items.length} match${items.length === 1 ? '' : 'es'} · ` : ''}{selected.length}/4 selected
+        </span>
         <button className="btn btn-primary" disabled={selected.length < 2 || comparing} onClick={runComparison}>
           <GitCompare size={14} style={{marginRight:6}} /> {comparing ? 'Comparing…' : 'Compare'}
         </button>
@@ -104,9 +156,9 @@ export default function PrincipalCompare() {
             <table>
               <thead><tr><th>{mode === 'classes' ? 'Class' : 'Student'}</th><th style={{textAlign:'center'}}>Average</th><th style={{textAlign:'center'}}>Status</th><th style={{width:40}}></th></tr></thead>
               <tbody>
-                {items.slice(0, 50).map((item, i) => {
+                {shown.map((item, i) => {
                   const sel = selected.find(s => s.id === item.id);
-                  const avg = mode === 'classes' ? (classes.find(c=>c.class_id===item.id)?.average_percentage || 0) : (students.find(s=>s.student_id===item.id)?.average || 0);
+                  const avg = mode === 'classes' ? (classes.find(c=>c.class_id===item.id)?.average_percentage || 0) : (studentPool.find(s=>s.student_id===item.id)?.average || 0);
                   return (
                     <motion.tr key={item.id} initial={{opacity:0}} animate={{opacity:1}} transition={{delay:i*0.02}} onClick={()=>toggleSelect(item)} style={{background:sel?sel.color+'10':'transparent'}}>
                       <td style={{fontWeight:600}}>{item.name}</td>
@@ -116,9 +168,19 @@ export default function PrincipalCompare() {
                     </motion.tr>
                   );
                 })}
+                {!shown.length && (
+                  <tr><td colSpan={4} style={{textAlign:'center',padding:'36px 20px',color:'var(--text-muted)'}}>
+                    No {mode} match “{query}” — try another spelling.
+                  </td></tr>
+                )}
               </tbody>
             </table>
           </div>
+          {items.length > 50 && (
+            <div className="fx-picker-note">
+              Showing first 50 of {items.length} matches — refine the search to narrow it down.
+            </div>
+          )}
         </div>
       )}
 
@@ -136,7 +198,7 @@ function ComparisonResults({ data, mode, onClear }) {
     att: d.attendance_rate || 0,
     color: d.color,
   }));
-  const radarData = (data[0]?.subject_averages || data[0]?.subject_exam_grid || []).map((sub, i) => {
+  const radarData = (data[0]?.subject_averages || data[0]?.subject_exam_grid || []).map((sub) => {
     const entry = { subject: sub.name };
     data.forEach(d => {
       if (mode === 'classes') {
@@ -161,10 +223,10 @@ function ComparisonResults({ data, mode, onClear }) {
         <div style={{width:'100%',height:280}}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} margin={{top:10,right:10,left:-20,bottom:0}}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,210,230,0.3)" />
-              <XAxis dataKey="name" tick={{fontSize:11,fill:'var(--text-secondary)'}} />
-              <YAxis domain={[0,100]} tick={{fontSize:12,fill:'var(--text-secondary)'}} />
-              <Tooltip contentStyle={{borderRadius:12,fontSize:13}} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(143,146,171,0.28)" />
+              <XAxis dataKey="name" tick={{fontSize:11,fill:'#8f92ab'}} />
+              <YAxis domain={[0,100]} tick={{fontSize:12,fill:'#8f92ab'}} />
+              <Tooltip contentStyle={{borderRadius:12,border:'1px solid var(--line)',background:'var(--surf)',fontSize:13}} />
               <Legend />
               <Bar dataKey="avg" name="Average %" radius={[8,8,0,0]}>
                 {chartData.map((d,i)=><Cell key={i} fill={d.color} />)}
@@ -181,9 +243,9 @@ function ComparisonResults({ data, mode, onClear }) {
           <div style={{width:'100%',height:320}}>
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={radarData}>
-                <PolarGrid stroke="rgba(200,210,230,0.4)" />
-                <PolarAngleAxis dataKey="subject" tick={{fontSize:10,fill:'var(--text-secondary)'}} />
-                <PolarRadiusAxis domain={[0,100]} tick={{fontSize:10,fill:'var(--text-muted)'}} />
+                <PolarGrid stroke="rgba(143,146,171,0.35)" />
+                <PolarAngleAxis dataKey="subject" tick={{fontSize:10,fill:'#8f92ab'}} />
+                <PolarRadiusAxis domain={[0,100]} tick={{fontSize:10,fill:'#8f92ab'}} />
                 {data.map((d,i) => <Radar key={i} dataKey={mode==='classes'?d.label:d.name} stroke={d.color} fill={d.color} fillOpacity={0.1} strokeWidth={2} />)}
                 <Legend />
               </RadarChart>
@@ -192,7 +254,7 @@ function ComparisonResults({ data, mode, onClear }) {
         </div>
       )}
 
-      <div className="compare-grid" style={{gridTemplateColumns:`repeat(${data.length}, 1fr)`}} className="two-col-charts">
+      <div className="compare-grid" style={{gridTemplateColumns:`repeat(${data.length}, 1fr)`}}>
         {data.map((d, i) => (
           <div key={i} className="compare-col" style={{borderTop:`3px solid ${d.color}`}}>
             <div className="compare-col-header">

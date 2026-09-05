@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { FileText } from 'lucide-react';
 import { EASE } from '../../lib/motion.jsx';
 
-/* SchoolAI Terms of Service — realistic legal-ish copy.
+/* Fetch-X Terms of Service — realistic legal-ish copy.
    Sections: Acceptance, Accounts, Acceptable Use, Privacy, Disclaimers,
    Limitation of Liability, Changes, Contact. */
 
@@ -11,7 +11,7 @@ const SECTIONS = [
     id: 'acceptance',
     title: '1. Acceptance of Terms',
     body: [
-      'By accessing or using the SchoolAI platform ("the Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, you may not access or use the Service.',
+      'By accessing or using the Fetch-X platform ("the Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, you may not access or use the Service.',
       'The Service is provided to schools, educators, administrators, and authorized family members for the purpose of managing student attendance, academic performance, and related activities.',
     ],
   },
@@ -19,7 +19,7 @@ const SECTIONS = [
     id: 'accounts',
     title: '2. Accounts',
     body: [
-      'Accounts on SchoolAI are created by school administrators — there is no public self-registration. Your administrator will assign your role (Class Teacher, Principal, Chairperson, Parent, School Admin, or Super Admin) and link your account to the appropriate school, class, or student record.',
+      'Accounts on Fetch-X are created by school administrators — there is no public self-registration. Your administrator will assign your role (Class Teacher, Principal, Chairperson, Parent, School Admin, or Super Admin) and link your account to the appropriate school, class, or student record.',
       'You are responsible for safeguarding your login credentials and for all activity that occurs under your account. Notify your administrator immediately if you suspect any unauthorized access.',
       'Each role grants a specific scope of access. You may not attempt to access data outside the scope of your assigned role.',
     ],
@@ -57,8 +57,8 @@ const SECTIONS = [
     id: 'liability',
     title: '6. Limitation of Liability',
     body: [
-      'To the maximum extent permitted by law, SchoolAI and its affiliates shall not be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits or revenues, arising out of your use of the Service.',
-      'Our total aggregate liability for any claim arising out of or relating to these Terms or the Service shall not exceed the amount paid by your school to SchoolAI in the twelve (12) months preceding the claim.',
+      'To the maximum extent permitted by law, Fetch-X and its affiliates shall not be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits or revenues, arising out of your use of the Service.',
+      'Our total aggregate liability for any claim arising out of or relating to these Terms or the Service shall not exceed the amount paid by your school to Fetch-X in the twelve (12) months preceding the claim.',
     ],
   },
   {
@@ -73,8 +73,8 @@ const SECTIONS = [
     id: 'contact',
     title: '8. Contact',
     body: [
-      'If you have questions about these Terms, please contact your school administrator first. They can route specific questions to the SchoolAI team.',
-      'For legal inquiries, you may reach us at: legal@schoolai.example',
+      'If you have questions about these Terms, please contact your school administrator first. They can route specific questions to the Fetch-X team.',
+      'For legal inquiries, you may reach us at: legal@fetchx.example',
     ],
   },
 ];

@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { Shield } from 'lucide-react';
 import { EASE } from '../../lib/motion.jsx';
 
-/* SchoolAI Privacy Policy — realistic legal-ish copy.
+/* Fetch-X Privacy Policy — realistic legal-ish copy.
    Sections: Information We Collect, How We Use It, Data Security, Student Data,
    Cookies, Your Rights, Children's Privacy, Changes, Contact. */
 
@@ -15,7 +15,7 @@ const SECTIONS = [
       '• Account information: name, email address, role, and the school or class you are linked to. This is provided by your school administrator.',
       '• Student records: name, roll number, class, attendance, marks, and assessment data entered by teachers or administrators.',
       '• Usage data: aggregated, anonymized metrics about feature usage to help us improve the Service. We do not track individual page views for marketing purposes.',
-      '• Authentication tokens: stored locally in your browser to keep you signed in. We do not store your password in any reversible form — passwords are hashed with bcrypt before storage.',
+      '• Authentication tokens: stored locally in your browser to keep you signed in. We do not store your password in any reversible form — passwords are hashed and salted before storage.',
     ],
   },
   {
@@ -34,7 +34,7 @@ const SECTIONS = [
     id: 'security',
     title: '3. Data Security',
     body: [
-      'We use industry-standard safeguards to protect your data: encrypted passwords (bcrypt), role-based access control at every API endpoint, scoped database queries that filter by school_id and role, and session tokens with expiration.',
+      'We use industry-standard safeguards to protect your data: salted password hashing, role-based access control at every API endpoint, scoped database queries that filter by school_id and role, and session tokens with expiration.',
       'No method of transmission over the Internet or electronic storage is 100% secure. While we strive to use commercially acceptable means to protect your data, we cannot guarantee absolute security.',
       'In the event of a data breach affecting your school, we will notify your school administrator without undue delay.',
     ],
@@ -54,7 +54,7 @@ const SECTIONS = [
     title: '5. Cookies & Local Storage',
     body: [
       'The Service uses local storage — not cookies — to remember your authentication token, theme preference, and basic UI state. This data never leaves your browser unless you explicitly sign in.',
-      'We do not use tracking cookies, advertising pixels, or third-party analytics scripts. There is no cross-site tracking on SchoolAI.',
+      'We do not use tracking cookies, advertising pixels, or third-party analytics scripts. There is no cross-site tracking on Fetch-X.',
     ],
   },
   {
@@ -66,7 +66,7 @@ const SECTIONS = [
       '• Request correction of inaccurate personal data.',
       '• Request deletion of your personal data, subject to the school\'s record-retention obligations.',
       '• Object to or restrict certain processing of your data.',
-      'To exercise these rights, contact your school administrator first. They can route your request to the SchoolAI team.',
+      'To exercise these rights, contact your school administrator first. They can route your request to the Fetch-X team.',
     ],
   },
   {
@@ -91,7 +91,7 @@ const SECTIONS = [
     title: '9. Contact',
     body: [
       'If you have questions about this Privacy Policy or the data practices of the Service, please contact your school administrator.',
-      'For direct privacy inquiries, you may reach us at: privacy@schoolai.example',
+      'For direct privacy inquiries, you may reach us at: privacy@fetchx.example',
     ],
   },
 ];

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Loader2, AlertCircle, GraduationCap } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowLeft } from 'lucide-react';
 import { useAuth, homePathFor } from '../auth/AuthContext';
 import { EASE, SPRING } from '../lib/motion.jsx';
+import { Logo } from '../components/Logo.jsx';
 
 const field = (delay) => ({
   initial: { opacity: 0, y: 16 },
@@ -41,22 +42,11 @@ export default function Login() {
 
   return (
     <div className="login-shell">
-      {/* Drifting orbs */}
-      <motion.span className="orb orb-1 orb-login-1" aria-hidden="true"
-        animate={{ x: [0, 30, -10, 0], y: [0, -20, 15, 0], scale: [1, 1.08, 0.96, 1] }}
-        transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }} />
-      <motion.span className="orb orb-2 orb-login-2" aria-hidden="true"
-        animate={{ x: [0, -25, 12, 0], y: [0, 18, -12, 0], scale: [1, 0.94, 1.06, 1] }}
-        transition={{ duration: 22, repeat: Infinity, ease: 'easeInOut' }} />
-      <motion.span className="orb orb-3 orb-login-3" aria-hidden="true"
-        animate={{ x: [0, 18, -18, 0], y: [0, -14, 10, 0] }}
-        transition={{ duration: 26, repeat: Infinity, ease: 'easeInOut' }} />
-
       <motion.div className="login-card-wrap"
         initial={{ opacity: 0, scale: 0.94, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.6, ease: EASE }}>
-        <div className="glass login-card">
+        <div className="login-card">
           {/* Logo mark with glow pulse */}
           <motion.div className="login-logo"
             initial={{ scale: 0.6, opacity: 0 }}
@@ -65,10 +55,10 @@ export default function Login() {
             <motion.span className="login-logo-glow"
               animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.15, 1] }}
               transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }} />
-            <GraduationCap size={28} strokeWidth={2.4} color="#fff" />
+            <Logo size={54} />
           </motion.div>
 
-          <motion.h1 className="login-title" {...field(0.18)}>SchoolAI Portal</motion.h1>
+          <motion.h1 className="login-title" {...field(0.18)}>Fetch-X Portal</motion.h1>
           <motion.p className="login-sub" {...field(0.24)}>Authorized personnel only</motion.p>
 
           {error && (
@@ -82,13 +72,15 @@ export default function Login() {
           )}
 
           <form onSubmit={handleSubmit}>
-            <motion.div className="login-field" {...field(0.32)}>
-              <input type="email" placeholder="Email address" value={email}
-                onChange={(e) => setEmail(e.target.value)} className="input" required />
+            <motion.div className="login-field field" {...field(0.32)}>
+              <label htmlFor="login-email">Email</label>
+              <input id="login-email" type="email" placeholder="you@school.edu" value={email}
+                onChange={(e) => setEmail(e.target.value)} className="input" autoComplete="username" required />
             </motion.div>
-            <motion.div className="login-field" {...field(0.40)}>
-              <input type="password" placeholder="Password" value={password}
-                onChange={(e) => setPassword(e.target.value)} className="input" required />
+            <motion.div className="login-field field" {...field(0.40)}>
+              <label htmlFor="login-password">Password</label>
+              <input id="login-password" type="password" placeholder="••••••••" value={password}
+                onChange={(e) => setPassword(e.target.value)} className="input" autoComplete="current-password" required />
             </motion.div>
 
             <motion.div className="login-terms" {...field(0.48)}>
@@ -118,8 +110,8 @@ export default function Login() {
         </div>
 
         <motion.p className="login-footer" {...field(0.7)}>
-          <Link to="/" className="login-footer-back">← Back to site</Link>
-          <span>SchoolAI Data Intelligence Platform · v1.1</span>
+          <Link to="/" className="login-footer-back"><ArrowLeft size={13} /> Back to site</Link>
+          <span>Fetch-X Data Intelligence Platform · v1.1</span>
         </motion.p>
       </motion.div>
     </div>

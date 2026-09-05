@@ -1,0 +1,149 @@
+/* ============================================================
+   Principal Dashboard — page-scoped styles.
+   Everything reusable lives in src/index.css (2-b design kit);
+   this file only adds what the page needs on top of it:
+     - page shell (fills the Layout main-area, internal scroll)
+     - AI panel chat surface + mobile drawer
+     - skeleton loaders + minor responsive patches
+   ============================================================ */
+
+/* ---- page shell ------------------------------------------------ */
+.pd-root { display: flex; height: calc(100vh - 58px); min-height: 480px; }
+.pd-main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding-right: 10px; }
+.pd-main::-webkit-scrollbar { width: 10px; }
+.pd-main::-webkit-scrollbar-track { background: transparent; }
+.pd-main::-webkit-scrollbar-thumb { background: var(--grip); border-radius: 8px; }
+.pd-main::-webkit-scrollbar-thumb:hover { background: #8a7cf6; }
+
+/* ---- skeletons -------------------------------------------------- */
+.pd-skel { position: relative; overflow: hidden; background: var(--chip); border-radius: 10px; }
+.pd-skel::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.5), transparent);
+  animation: pdShimmer 1.4s infinite;
+}
+body.dark .pd-skel::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,.07), transparent); }
+@keyframes pdShimmer { to { transform: translateX(100%); } }
+.pd-skel.line { height: 10px; margin: 8px 0; }
+.pd-skel.block { height: 96px; }
+.pd-skel.tall { height: 190px; }
+.pd-skel-row { display: grid; grid-template-columns: 48px minmax(0,1fr) 104px 146px 34px; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.pd-skel-row:last-child { border-bottom: none; }
+.pd-note { padding: 24px 16px; text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); }
+
+/* ---- AI panel: real chat surface -------------------------------- */
+.ai-msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 1px 6px; }
+.ai-msgs::-webkit-scrollbar { width: 6px; }
+.ai-msgs::-webkit-scrollbar-thumb { background: var(--grip); border-radius: 8px; }
+.ai-msg { background: var(--surf); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 10.5px; line-height: 1.65; color: var(--ink); overflow-wrap: break-word; }
+.ai-msg.user { background: #5b4fe9; border-color: #5b4fe9; color: #fff; font-weight: 600; align-self: flex-end; max-width: 94%; border-bottom-right-radius: 4px; }
+.ai-msg.bot { align-self: stretch; border-bottom-left-radius: 4px; }
+.ai-msg.bot h3 { font-size: 11px; font-weight: 800; margin: 7px 0 3px; color: var(--ink); }
+.ai-msg.bot h3:first-child { margin-top: 0; }
+.ai-msg.bot p { margin: 3px 0; }
+.ai-msg.bot ul, .ai-msg.bot ol { padding-left: 15px; display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+.ai-msg.bot code { background: rgba(91,79,233,.12); padding: 1px 4px; border-radius: 4px; font-size: .92em; }
+.ai-msg .ai-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.ai-badge { font-size: 7px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; background: var(--lav); color: #4f42dd; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+.ai-badge.tools { background: var(--chip); color: var(--muted); }
+.ai-err { background: #fdeaea; border: 1px solid #f3c4c4; color: #b91c1c; border-radius: 10px; padding: 9px 10px; font-size: 10px; font-weight: 600; display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
+body.dark .ai-err { background: rgba(220,38,38,.12); border-color: rgba(220,38,38,.35); color: #fca5a5; }
+.ai-err button { align-self: flex-start; font: inherit; font-size: 8.5px; font-weight: 800; letter-spacing: .08em; color: #b91c1c; background: var(--surf); border: 1px solid #f3c4c4; border-radius: 7px; padding: 5px 9px; cursor: pointer; }
+.ai-err button:hover { border-color: #dc2626; }
+.ask-input { gap: 8px; }
+.ask-input input { flex: 1; min-width: 0; border: none; outline: none; font: inherit; font-size: 10.5px; font-weight: 600; color: var(--ink); background: transparent; }
+.ask-input input::placeholder { color: var(--muted); font-weight: 500; }
+.ask-input .send:disabled { opacity: .55; cursor: default; }
+@keyframes aiWave { 0%, 100% { transform: scaleY(.4); opacity: .5; } 50% { transform: scaleY(1); opacity: 1; } }
+.pd-root.ai-collapsed .rightbar { width: 0; padding-right: 0; border-left: none; }
+.pd-root.ai-collapsed .ai-handle .grip { height: 58px; background: #8a7cf6; opacity: 1; }
+
+/* ---- AI resize grip stretches with the panel -------------------- */
+.ai-handle { align-self: stretch; }
+
+/* ---- report modal print helper ---------------------------------- */
+@media print {
+  body * { visibility: hidden; }
+  .report, .report * { visibility: visible; }
+  .report { position: absolute; left: 0; top: 0; width: 100%; box-shadow: none; }
+}
+
+/* ---- responsive: AI drawer (mirrors prototype ≤1150px) ---------- */
+@media (max-width: 1150px) {
+  .pd-root .ai-handle { display: none; }
+  .pd-root .rightbar, .pd-root.ai-collapsed .rightbar {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 90;
+    width: min(320px, 88vw) !important; padding: 10px;
+    transform: translateX(112%); transition: transform .3s var(--ease);
+  }
+  .pd-root .rightpanel { width: 100% !important; }
+  .pd-root.ai-open .rightbar { transform: none; box-shadow: -24px 0 60px rgba(23,20,50,.28); }
+  .pd-root .ai-fab { display: grid; }
+  .pd-root.ai-open .ai-fab { display: none; }
+  .pd-root { height: auto; min-height: calc(100vh - 58px); }
+  .pd-main { overflow: visible; padding-right: 0; }
+}
+
+/* ═══════════════ 6-b · Teachers Level (v5 designer update) ═══════════════ */
+/* Faculty row: report-arrow button (mirrors .bm geometry, purple lvl-6). */
+.srow .tb {
+  width: 28px; height: 28px; border: 1px solid var(--line); background: var(--surf);
+  color: var(--muted); border-radius: 8px; display: grid; place-items: center;
+  cursor: pointer; padding: 0; transition: color .15s, border-color .15s, transform .15s;
+}
+.srow .tb svg { width: 13px; height: 13px; }
+.srow .tb:hover { color: var(--lvlD, #9333ea); border-color: var(--lvlD, #9333ea); transform: translateX(2px); }
+.srow .tb:focus-visible { outline: 2px solid var(--lvlD, #9333ea); outline-offset: 2px; }
+
+/* Subject names in the class-chip column can be longer than class labels. */
+.classchip { text-overflow: ellipsis; }
+
+/* Grouped bars gain click-to-open (teacher report class comparison). */
+.vpair.clickable { cursor: pointer; }
+.vpair.clickable:hover .vval { opacity: 1; transform: translate(-50%, 0); }
+.vpair.clickable:hover .vbar2 i { filter: brightness(1.07); }
+.vpair.clickable:focus-visible { outline: 2px solid var(--lvlD, #9333ea); outline-offset: 2px; }
+
+/* Teacher-report modal reuses the .report kit; only the faculty-rank pill
+   needs a shade that reads on both band colors. */
+.report .bigrank .sub { color: var(--muted); }
+
+/* ═══════════ 6-d · scroll-reveal + micro-motion (reduced-motion safe) ═════
+   Sections below the fold rise in as they enter the viewport, children
+   staggered; hidden state exists ONLY under no-preference media so content
+   can never be trapped invisible. */
+@media (prefers-reduced-motion: no-preference) {
+  .pd-main .lvl.rv > * { opacity: 0; transform: translateY(16px); transition: opacity .55s var(--ease), transform .55s var(--ease); }
+  .pd-main .lvl.rv.in > * { opacity: 1; transform: none; transition: opacity .55s var(--ease), transform .55s var(--ease); }
+  .pd-main .lvl.rv.in > *:nth-child(2) { transition-delay: 70ms; }
+  .pd-main .lvl.rv.in > *:nth-child(3) { transition-delay: 140ms; }
+  .pd-main .lvl.rv.in > *:nth-child(4) { transition-delay: 210ms; }
+  .pd-main .lvl.rv.in > *:nth-child(5) { transition-delay: 280ms; }
+  .pd-main .lvl.rv.in > *:nth-child(6) { transition-delay: 350ms; }
+
+  /* Modal backdrops breathe in instead of hard-cutting. */
+  @keyframes bkIn { from { opacity: 0; } }
+  .modal-backdrop.open { animation: bkIn .22s var(--ease); }
+}
+
+/* Keyboard focus rings on the interactive rows/cards (a11y gate). */
+.srow:focus-visible, .s-card.clickable:focus-visible {
+  outline: 2px solid var(--lvlD, #4f42dd); outline-offset: -2px;
+}
+
+/* ═══════════ 6-f · phone-width list rows (390px QA fix) ══════════════════
+   The 5-column row grid (48px 1fr 104px 146px 34px) needs ~410px of chrome;
+   at phone widths it clipped/overflowed. Compress chrome, hide the trend
+   arrow, keep every column readable. Applies to students, teachers and the
+   report modals' cohorts (shared .srow kit). */
+@media (max-width: 560px) {
+  .st-head, .srow, .pd-skel-row {
+    grid-template-columns: 34px minmax(0, 1.4fr) 72px minmax(54px, 1fr) 28px;
+    gap: 7px; padding-left: 10px; padding-right: 10px;
+  }
+  .srow .scorepill { gap: 5px; }
+  .srow .scorepill .pc { min-width: 32px; font-size: 11.5px; }
+  .srow .scorepill .trend { display: none; }
+  .srow .avatar { width: 22px; height: 22px; font-size: 7.5px; }
+  .st-name { gap: 7px; }
+}

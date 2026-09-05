@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import engine, Base, SessionLocal
-from app.models import user, user_school, school, class_, student, attendance, task, mark, subject, grade_subject, exam
+from app.models import user, user_school, school, class_, student, attendance, task, mark, subject, grade_subject, exam, teacher_assignment
 from app.routers import auth, admin, attendance, tasks, academics, principal, chairperson, parent
 from app.rate_limit import limiter
 from slowapi import _rate_limit_exceeded_handler
@@ -108,7 +108,18 @@ app.include_router(parent.router)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"detail": "Internal server error", "error": str(exc)})
+    # Log the full traceback server-side only; never echo internal error
+    # strings back to the client (information-disclosure hardening).
+    import logging
+    import traceback
+
+    logging.getLogger("uvicorn.error").error(
+        "Unhandled exception on %s %s:\n%s",
+        request.method,
+        request.url.path,
+        traceback.format_exc(),
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.get("/")

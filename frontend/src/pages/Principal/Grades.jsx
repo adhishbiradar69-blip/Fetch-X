@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { BarChart3, ChevronRight, Users, TrendingUp, AlertTriangle } from 'lucide-react';
 import api from '../../api/client';
 import { Page } from '../../lib/motion.jsx';
+import { SkeletonPage } from '../../components/Skeleton.jsx';
 import { Toast, Modal } from '../../components/ui.jsx';
 
 const gradeColor = (avg) => avg >= 75 ? '#10b981' : avg >= 60 ? '#f59e0b' : avg >= 45 ? '#fb923c' : '#ef4444';
@@ -25,7 +26,7 @@ export default function PrincipalGrades() {
     catch { showToast('Failed','error'); }
   };
 
-  if (loading) return <Page><div className="skeleton-card" style={{padding:80,textAlign:'center',color:'var(--text-muted)'}}>Loading grades…</div></Page>;
+  if (loading) return <SkeletonPage eyebrowW={88} titleW={230} subW={370} stats={3} charts={1} rows={4} />;
   if (!trends) return <Page><div className="empty-state-pro"><h3>No data</h3><p>Seed data first.</p></div></Page>;
 
   const gradeData = (trends.by_grade || []).map(g => ({ grade: `G${g.grade}`, gradeNum: g.grade, avg: g.average, students: g.students }));
@@ -33,10 +34,12 @@ export default function PrincipalGrades() {
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}
-      <div className="page-header-pro">
-        <div className="breadcrumb"><a href="/principal/dashboard">Dashboard</a> / Grades</div>
-        <h2>Grade Overview</h2>
-        <p>Performance breakdown across all {gradeData.length} grades — click any bar to inspect</p>
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow"><a href="/principal/dashboard">Dashboard</a> / Grades</div>
+          <h1>Grade Overview</h1>
+          <div className="subtitle">Performance breakdown across all {gradeData.length} grades — click any bar to inspect</div>
+        </div>
       </div>
 
       <div className="chart-card-premium">
@@ -47,10 +50,10 @@ export default function PrincipalGrades() {
         <div style={{ width: '100%', height: 320 }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={gradeData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,210,230,0.3)" />
-              <XAxis dataKey="grade" tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
-              <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid rgba(79,125,243,0.2)', fontSize: 13 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(143,146,171,0.28)" />
+              <XAxis dataKey="grade" tick={{ fontSize: 12, fill: '#8f92ab' }} />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: '#8f92ab' }} />
+              <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surf)', fontSize: 13 }} />
               <Bar dataKey="avg" radius={[8, 8, 0, 0]} onClick={(d) => inspectGrade(d.gradeNum)} cursor="pointer">
                 {gradeData.map((d, i) => <Cell key={i} fill={gradeColor(d.avg)} />)}
               </Bar>
@@ -71,7 +74,7 @@ export default function PrincipalGrades() {
                 <td style={{ textAlign: 'center' }}>{g.students}</td>
                 <td style={{ textAlign: 'center', fontWeight: 700, color: gradeColor(g.avg) }}>{fmt(g.avg, 1)}%</td>
                 <td style={{ textAlign: 'center' }}>
-                  {g.avg >= 70 ? <span className="pill-tag" style={{background:'rgba(16,185,129,0.12)',color:'#16a34a'}}>Strong</span> : g.avg >= 50 ? <span className="pill-tag" style={{background:'rgba(245,158,11,0.12)',color:'#d97706'}}>Average</span> : <span className="pill-tag" style={{background:'rgba(239,68,68,0.12)',color:'#dc2626'}}>Needs Focus</span>}
+                  {g.avg >= 70 ? <span className="pill-tag" style={{background:'rgba(16,185,129,.14)',color:'#0b7a5c'}}>Strong</span> : g.avg >= 50 ? <span className="pill-tag" style={{background:'rgba(180,95,4,.16)',color:'#b45f04'}}>Average</span> : <span className="pill-tag" style={{background:'rgba(220,38,38,.14)',color:'#ef4444'}}>Needs Focus</span>}
                 </td>
                 <td><ChevronRight size={14} color="var(--text-muted)" /></td>
               </motion.tr>

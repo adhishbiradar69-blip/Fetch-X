@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { GitCompare, Plus, X, Building2, Trophy } from 'lucide-react';
 import api from '../../api/client';
 import { Page } from '../../lib/motion.jsx';
+import { SkeletonPage } from '../../components/Skeleton.jsx';
 import { Toast } from '../../components/ui.jsx';
 
 const COLORS = ['#4f7df3', '#34bfa1', '#f0a04b', '#8b5cf6', '#e85d75', '#0ea5e9'];
@@ -52,7 +53,7 @@ export default function ChairpersonCompare() {
     setComparing(false);
   };
 
-  if (loading) return <Page><div className="skeleton-card" style={{padding:80,textAlign:'center',color:'var(--text-muted)'}}>Loading…</div></Page>;
+  if (loading) return <SkeletonPage eyebrowW={96} titleW={240} subW={400} stats={4} charts={0} rows={5} />;
 
   const subjectLeaders = compare?.subject_leaders || [];
 

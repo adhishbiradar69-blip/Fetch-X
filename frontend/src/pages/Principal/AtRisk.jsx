@@ -32,30 +32,32 @@ export default function PrincipalAtRisk() {
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}
-      <div className="page-header-pro">
-        <div className="breadcrumb"><a href="/principal/dashboard">Dashboard</a> / At-Risk Center</div>
-        <h2>At-Risk Intervention Center</h2>
-        <p>{students.length} students need attention — prioritize by severity below</p>
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow"><a href="/principal/dashboard">Dashboard</a> / At-Risk Center</div>
+          <h1>At-Risk Intervention Center</h1>
+          <div className="subtitle">{students.length} students need attention — prioritize by severity below</div>
+        </div>
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16,marginBottom:24}} className="two-col-charts">
-        <motion.div className="chart-card-premium" initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{delay:0.1}}>
-          <div className="chart-header-premium"><div className="chart-title-premium"><AlertTriangle size={18} color="#ef4444" /> Critical</div></div>
-          <div style={{fontSize:32,fontWeight:800,color:'#ef4444'}}>{critical.length}</div>
-          <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:0.8,fontWeight:600}}>Below 40% average</div>
-          <p style={{fontSize:13,color:'var(--text-secondary)',marginTop:8}}>Immediate intervention required. Schedule parent meetings this week.</p>
+        <motion.div className="card fx-risk-card" initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{delay:0.1}}>
+          <div className="chart-title-premium" style={{marginBottom:10}}><AlertTriangle size={16} color="#ef4444" /> <span className="kpi-tile-label">Critical</span></div>
+          <div className="fx-risk-num" style={{color:'#ef4444'}}>{critical.length}</div>
+          <div className="stat-label">Below 40% average</div>
+          <p className="fx-risk-note">Immediate intervention required. Schedule parent meetings this week.</p>
         </motion.div>
-        <motion.div className="chart-card-premium" initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{delay:0.15}}>
-          <div className="chart-header-premium"><div className="chart-title-premium"><Target size={18} color="#f59e0b" /> Moderate</div></div>
-          <div style={{fontSize:32,fontWeight:800,color:'#f59e0b'}}>{moderate.length}</div>
-          <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:0.8,fontWeight:600}}>40-50% average</div>
-          <p style={{fontSize:13,color:'var(--text-secondary)',marginTop:8}}>Monitor closely. Provide extra support and tutoring.</p>
+        <motion.div className="card fx-risk-card" initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{delay:0.15}}>
+          <div className="chart-title-premium" style={{marginBottom:10}}><Target size={16} color="#b45f04" /> <span className="kpi-tile-label">Moderate</span></div>
+          <div className="fx-risk-num" style={{color:'#b45f04'}}>{moderate.length}</div>
+          <div className="stat-label">40-50% average</div>
+          <p className="fx-risk-note">Monitor closely. Provide extra support and tutoring.</p>
         </motion.div>
-        <motion.div className="chart-card-premium" initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{delay:0.2}}>
-          <div className="chart-header-premium"><div className="chart-title-premium"><Users size={18} color="#8b5cf6" /> Attendance Risk</div></div>
-          <div style={{fontSize:32,fontWeight:800,color:'#8b5cf6'}}>{attendanceRisk.length}</div>
-          <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:0.8,fontWeight:600}}>Below 60% attendance</div>
-          <p style={{fontSize:13,color:'var(--text-secondary)',marginTop:8}}>Performing academically but missing school. Investigate absences.</p>
+        <motion.div className="card fx-risk-card" initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{delay:0.2}}>
+          <div className="chart-title-premium" style={{marginBottom:10}}><Users size={16} color="#8b5cf6" /> <span className="kpi-tile-label">Attendance Risk</span></div>
+          <div className="fx-risk-num" style={{color:'#8b5cf6'}}>{attendanceRisk.length}</div>
+          <div className="stat-label">Below 60% attendance</div>
+          <p className="fx-risk-note">Performing academically but missing school. Investigate absences.</p>
         </motion.div>
       </div>
 
@@ -71,19 +73,32 @@ export default function PrincipalAtRisk() {
             </thead>
             <tbody>
               {students.map((s, i) => {
-                const sev = s.average < 40 ? {label:'Critical',color:'#ef4444',bg:'rgba(239,68,68,0.12)'} : s.average < 50 ? {label:'Moderate',color:'#f59e0b',bg:'rgba(245,158,11,0.12)'} : {label:'Attendance',color:'#8b5cf6',bg:'rgba(139,124,246,0.12)'};
+                const sev = s.average < 40 ? {label:'Critical',color:'#ef4444',bg:'rgba(220,38,38,.14)'} : s.average < 50 ? {label:'Moderate',color:'#b45f04',bg:'rgba(180,95,4,.16)'} : {label:'Attendance',color:'#8b5cf6',bg:'rgba(139,92,246,.14)'};
                 return (
                   <motion.tr key={s.student_id||i} initial={{opacity:0}} animate={{opacity:1}} transition={{delay:i*0.02}} onClick={()=>viewStudent(s.student_id)}>
                     <td style={{fontWeight:600}}>{s.name}</td>
                     <td style={{fontSize:13}}>{s.class_label || s.label}</td>
                     <td style={{textAlign:'center',fontWeight:700,color:gradeColor(s.average)}}>{fmt(s.average,1)}%</td>
-                    <td style={{textAlign:'center',color:s.attendance_rate<60?'#ef4444':'var(--text-secondary)'}}>{fmt(s.attendance_rate,0)}%</td>
-                    <td style={{fontSize:13,color:'var(--text-secondary)'}}>{s.weakest_subject?.name || '—'}</td>
+                    <td style={{textAlign:'center',color:s.attendance_rate<60?'#ef4444':'var(--body-text)'}}>{fmt(s.attendance_rate,0)}%</td>
+                    <td style={{fontSize:13,color:'var(--body-text)'}}>{s.weakest_subject?.name || '—'}</td>
                     <td style={{textAlign:'center'}}><span className="pill-tag" style={{background:sev.bg,color:sev.color}}>{sev.label}</span></td>
                     <td><ChevronRight size={14} color="var(--text-muted)" /></td>
                   </motion.tr>
                 );
               })}
+              {!loading && !students.length && (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '44px 20px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                      <span className="pill-tag" style={{ background: 'rgba(14,159,110,.14)', color: '#0e9f6e', fontWeight: 800, letterSpacing: '.06em' }}>ALL CLEAR</span>
+                      <div style={{ fontWeight: 800, fontSize: 16 }}>No students need attention right now</div>
+                      <div style={{ color: 'var(--muted)', fontSize: 13, maxWidth: 420 }}>
+                        Nobody is below the 50% average or 60% attendance thresholds. The list fills in automatically as soon as a student needs support.
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -107,7 +122,7 @@ function StudentProfileView({ data }) {
         <div className="kpi-tile"><div className="kpi-tile-label">Rank in Grade</div><div className="kpi-tile-value">#{data.rank_in_grade ?? '—'}</div></div>
         <div className="kpi-tile"><div className="kpi-tile-label">Attendance</div><div className="kpi-tile-value">{fmt(data.attendance_rate,1)}%</div></div>
       </div>
-      <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>
+      <p style={{fontSize:13,color:'var(--body-text)',marginBottom:16}}>
         {data.class_label} · Strongest: <strong>{data.strongest_subject?.name || '—'}</strong> ({fmt(data.strongest_subject?.average,1)}%) · Weakest: <strong>{data.weakest_subject?.name || '—'}</strong> ({fmt(data.weakest_subject?.average,1)}%)
       </p>
       {grid.length > 0 && (

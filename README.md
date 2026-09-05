@@ -111,6 +111,7 @@ Then log in at your Vercel URL with `admin@schoolai.test` / `admin123`.
 - **Login fails on Vercel**: You forgot to set `VITE_API_URL`. The login page will show "Cannot reach the server" if the backend URL is wrong/unset.
 - **CORS errors in console**: Add your Vercel URL to the `ALLOWED_ORIGINS` env var on Render.
 - **Backend sleeps on free tier**: Render's free tier sleeps after 15 min of inactivity. First request after sleep takes ~30s. Upgrade to paid tier for production use.
+- **`Failed to resolve import "html2canvas"` (or `"jspdf"`) overlay in the browser**: your `node_modules` is stale — the PDF export deps were added to `frontend/package.json` after your last install. Fix: stop the dev server, then run `npm install` inside `frontend/`, and start it again (`npm run dev`). Never copy newer `src/` files over an older checkout without re-installing dependencies.
 
 ## License
 MIT

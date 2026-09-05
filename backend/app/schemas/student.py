@@ -18,6 +18,20 @@ class ClassCreate(BaseModel):
             raise ValueError("Grade must be between 1 and 10")
         return v
 
+    @field_validator("section")
+    @classmethod
+    def validate_section(cls, v):
+        # Accept any short section label — house names like "Sapphire" are
+        # allowed, not just A/B/C/D. Normalise whitespace, cap length.
+        if not isinstance(v, str):
+            raise ValueError("Section must be a string")
+        s = v.strip()
+        if not s:
+            raise ValueError("Section is required")
+        if len(s) > 20:
+            raise ValueError("Section must be at most 20 characters")
+        return s
+
 
 class StudentCreate(BaseModel):
     name: str

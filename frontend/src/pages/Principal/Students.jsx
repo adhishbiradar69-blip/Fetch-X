@@ -38,6 +38,41 @@ export default function PrincipalStudents() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(0); }, [search, gradeFilter, sortBy]);
 
+  const [exporting, setExporting] = useState(false);
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      /* pull the whole filtered set in pages of 200 (backend cap) */
+      const PAGE = 200;
+      const base = new URLSearchParams({ limit: PAGE, offset: 0, sort: sortBy, order: 'desc' });
+      if (search) base.set('search', search);
+      if (gradeFilter) base.set('grade', gradeFilter);
+      const rows = [];
+      let totalCount = 0;
+      for (let offset = 0; offset === 0 || offset < totalCount; offset += PAGE) {
+        base.set('offset', String(offset));
+        const r = await api.get(`/principal/students?${base}`);
+        totalCount = r.data.total ?? 0;
+        rows.push(...(r.data.students || []));
+        if (offset >= 9 * PAGE) break; /* hard cap: 10 pages / 2 000 rows */
+      }
+      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const head = 'Rank,Name,Class,Average %,Attendance %,Trend\n';
+      const body = rows.map((s) => [
+        s.rank_in_school ?? s.rank ?? '', s.name, s.class_name ?? s.class_label ?? '',
+        s.avg ?? s.average ?? '', s.attendance_pct ?? s.attendance_rate ?? '', s.trend ?? '',
+      ].map(esc).join(',')).join('\n');
+      const url = URL.createObjectURL(new Blob([head + body], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `students-export-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(`Exported ${rows.length} students to CSV`);
+    } catch (e) { console.error(e); showToast('Export failed', 'error'); }
+    setExporting(false);
+  };
+
   const viewStudent = async (id) => {
     try { const r = await api.get(`/principal/students/${id}/profile`); setProfile(r.data); }
     catch { showToast('Failed to load profile', 'error'); }
@@ -48,10 +83,12 @@ export default function PrincipalStudents() {
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}
-      <div className="page-header-pro">
-        <div className="breadcrumb"><a href="/principal/dashboard">Dashboard</a> / Students</div>
-        <h2>Students Explorer</h2>
-        <p>Search, filter, and inspect every student in the school — {total} total</p>
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow"><a href="/principal/dashboard">Dashboard</a> / Students Explorer</div>
+          <h1>Students Explorer</h1>
+          <div className="subtitle">Search, filter, and inspect every student in the school — {total} total</div>
+        </div>
       </div>
 
       <div className="filter-bar-premium">
@@ -67,6 +104,10 @@ export default function PrincipalStudents() {
           <option value="average">Sort: Average (high to low)</option>
           <option value="name">Sort: Name (A to Z)</option>
         </select>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={exportCsv} disabled={exporting} title="Export the full filtered list to CSV">
+          <Download size={15} strokeWidth={2.2} />
+          {exporting ? 'Exporting…' : 'Export CSV'}
+        </button>
       </div>
 
       <div className="table-premium">
@@ -92,13 +133,13 @@ export default function PrincipalStudents() {
                 <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{s.roll_no || '—'}</td>
                 <td style={{ textAlign: 'center', fontWeight: 700, color: gradeColor(s.average) }}>{fmt(s.average, 1)}%</td>
                 <td style={{ textAlign: 'center' }}>{fmt(s.attendance_rate, 0)}%</td>
-                <td style={{ textAlign: 'center' }}>
+                <td style={{ textAlign: 'center', fontWeight: 700 }}>
                   {s.at_risk ? (
-                    <span className="pill-tag" style={{ background: 'rgba(239,68,68,0.12)', color: '#dc2626' }}>
+                    <span className="pill-tag" style={{ background: 'rgba(220,38,38,.14)', color: '#ef4444' }}>
                       <AlertTriangle size={10} style={{ marginRight: 3 }} /> At Risk
                     </span>
                   ) : (
-                    <span className="pill-tag" style={{ background: 'rgba(16,185,129,0.12)', color: '#16a34a' }}>On Track</span>
+                    <span className="pill-tag" style={{ background: 'rgba(16,185,129,.14)', color: '#0b7a5c' }}>On Track</span>
                   )}
                 </td>
                 <td><ChevronRight size={14} color="var(--text-muted)" /></td>

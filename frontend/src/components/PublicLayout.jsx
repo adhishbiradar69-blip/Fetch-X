@@ -1,14 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Menu, X, LogIn } from 'lucide-react';
-import { Logo } from './Logo.jsx';
 import ThemeSelector from './ThemeSelector.jsx';
-import { EASE } from '../lib/motion.jsx';
 
-/* Public site layout: sticky nav (logo + links + Sign In + theme picker)
-   + page outlet + footer. Active nav link gets a gradient underline.
-   Nav has a subtle framer-motion entrance on mount. */
+/* Public site shell — the designer's floating pill nav (fixed, centered,
+   blurred) + Fetch-X footer. Links keep the existing public routes.
+
+   Props:
+   - flush     — drop the shell's 88px nav clearance (landing route: the hero
+                 reserves its own 170px, per the prototype).
+   - spy       — optional scroll-spy map for pages with in-page sections:
+                 [{ id: 'sectionId', to: '/nav/path' }, ...]. While scrolling,
+                 the nav link whose section is in view gets the active state
+                 (prototype's active-nav-on-scroll), without changing routes. */
 const NAV = [
   { to: '/', label: 'Home', end: true },
   { to: '/about', label: 'About' },
@@ -16,88 +20,122 @@ const NAV = [
   { to: '/privacy', label: 'Privacy' },
 ];
 
-export default function PublicLayout({ children }) {
+export default function PublicLayout({ children, flush = false, spy = null }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [spyTo, setSpyTo] = useState(null);
   const navigate = useNavigate();
 
+  /* Reset the spy target when the spy map changes (render-phase derived
+     state reset — the React-endorsed pattern, same as useRouteTransition). */
+  const [lastSpy, setLastSpy] = useState(spy);
+  if (lastSpy !== spy) { setLastSpy(spy); setSpyTo(null); }
+
+  useEffect(() => {
+    if (!spy || spy.length === 0) return undefined;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const y = window.scrollY + 150;
+      let current = null;
+      spy.forEach(({ id, to }) => {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top + window.scrollY <= y) current = to;
+      });
+      /* At the very bottom of the document the last section can never cross
+         the scroll threshold on tall viewports — pin the last spy target. */
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+        current = spy[spy.length - 1].to;
+      }
+      setSpyTo(current);
+    };
+    raf = requestAnimationFrame(update); // initial pass, off the effect body
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(update); };
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [spy]);
+
   return (
-    <div className="public-shell">
-      {/* Ambient backdrop */}
-      <div className="ambient-orbs public-orbs" aria-hidden="true">
-        <span className="orb orb-1" />
-        <span className="orb orb-2" />
-        <span className="orb orb-3" />
-      </div>
+    <div className={`public-shell${flush ? ' flush' : ''}`}>
+      <header className="fx-nav public-nav">
+        <Link to="/" className="brand fx-nav-brand" onClick={() => setMenuOpen(false)}>
+          <span className="bx">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+              strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 9.5L12 4 2 9.5l10 5.5 10-5.5z" />
+              <path d="M6 12v4.5c0 1.4 2.7 2.8 6 2.8s6-1.4 6-2.8V12" />
+            </svg>
+          </span>
+          <span>Fetch-X</span>
+        </Link>
 
-      <motion.header
-        className="public-nav"
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.5, ease: EASE }}
-      >
-        <div className="public-nav-inner glass">
-          <Link to="/" className="public-nav-brand" onClick={() => setMenuOpen(false)}>
-            <Logo size={32} />
-            <span className="public-nav-wordmark">SchoolAI</span>
-          </Link>
-
-          <nav className={`public-nav-links ${menuOpen ? 'open' : ''}`}>
-            {NAV.map(item => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) => `public-nav-link ${isActive ? 'active' : ''}`}
-                onClick={() => setMenuOpen(false)}
-              >
-                {item.label}
-              </NavLink>
-            ))}
-          </nav>
-
-          <div className="public-nav-actions">
-            <ThemeSelector compact />
-            <motion.button
-              type="button"
-              className="btn btn-primary public-sign-in"
-              onClick={() => navigate('/login')}
-              whileHover={{ y: -2 }}
-              whileTap={{ scale: 0.97 }}
+        <nav className={`nlinks ${menuOpen ? 'open' : ''}`}>
+          {NAV.map(item => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) => {
+                /* Scroll-spy (when enabled) overrides the route highlight so
+                   exactly one link is active at a time. */
+                const active = spyTo ? spyTo === item.to : isActive;
+                return `fx-nav-link ${active ? 'active' : ''}`;
+              }}
+              onClick={() => setMenuOpen(false)}
             >
-              <LogIn size={16} /> <span>Sign In</span>
-            </motion.button>
-            <button
-              type="button"
-              className="public-nav-toggle"
-              onClick={() => setMenuOpen(o => !o)}
-              aria-label="Toggle menu"
-            >
-              {menuOpen ? <X size={20} /> : <Menu size={20} />}
-            </button>
-          </div>
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="fx-nav-actions public-nav-actions">
+          <ThemeSelector compact />
+          <button
+            type="button"
+            className="btn btn-primary btn-sm public-sign-in"
+            onClick={() => navigate('/login')}
+          >
+            <LogIn size={15} /> <span>Sign In</span>
+          </button>
+          <button
+            type="button"
+            className="fx-nav-toggle public-nav-toggle"
+            onClick={() => setMenuOpen(o => !o)}
+            aria-label="Toggle menu"
+          >
+            {menuOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
         </div>
-      </motion.header>
+      </header>
 
-      <main className="public-main">{children}</main>
+      <main className="fx-main public-main">{children}</main>
 
-      <footer className="public-footer">
-        <div className="public-footer-inner">
-          <div className="public-footer-brand">
-            <Logo size={28} />
-            <div>
-              <div className="public-footer-name">SchoolAI</div>
-              <div className="public-footer-tagline">Intelligent school management.</div>
-            </div>
+      <footer className="fx-footer public-footer">
+        <div className="fx-footer-inner public-footer-inner">
+          <div className="frow">
+            <Link to="/" className="brand">
+              <span className="bx">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+                  strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 9.5L12 4 2 9.5l10 5.5 10-5.5z" />
+                  <path d="M6 12v4.5c0 1.4 2.7 2.8 6 2.8s6-1.4 6-2.8V12" />
+                </svg>
+              </span>
+              <span>Fetch-X</span>
+            </Link>
+            <span className="ftag">Intelligent school management.</span>
+            <nav className="flinks">
+              <Link to="/about">About</Link>
+              <Link to="/terms">Terms of Service</Link>
+              <Link to="/privacy">Privacy Policy</Link>
+              <Link to="/login">Sign In</Link>
+            </nav>
           </div>
-          <nav className="public-footer-links">
-            <Link to="/about">About</Link>
-            <Link to="/terms">Terms of Service</Link>
-            <Link to="/privacy">Privacy Policy</Link>
-            <Link to="/login">Sign In</Link>
-          </nav>
-          <div className="public-footer-meta">
-            © {new Date().getFullYear()} SchoolAI Data Intelligence Platform. All rights reserved.
-          </div>
+          <p className="fcopy">© {new Date().getFullYear()} Fetch-X — Data Intelligence Platform. All rights reserved.</p>
         </div>
       </footer>
     </div>

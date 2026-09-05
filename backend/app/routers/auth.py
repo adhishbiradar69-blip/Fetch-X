@@ -9,6 +9,7 @@ from collections import defaultdict
 
 from app.database import get_db
 from app.models.user import User
+from app.models.school import School
 from app.schemas.auth import UserCreate, UserLogin, Token
 from app import config
 from app.rate_limit import limiter
@@ -190,7 +191,15 @@ def ensure_root_admin(db: Session) -> None:
 @router.post("/register", response_model=Token)
 @limiter.limit("60/minute")
 def register(request: Request, user: UserCreate, db: Session = Depends(get_db)):
+    # SECURITY hardening: self-signup may only ever create a school_admin
+    # bound to an existing school. super_admin accounts are provisioned
+    # exclusively by the startup root-admin seed / operator action.
+    if user.role != "school_admin":
+        raise HTTPException(status_code=403, detail="Self-registration is only allowed for the school_admin role.")
     _validate_email(user.email)
+    school = db.query(School).filter(School.id == user.school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")

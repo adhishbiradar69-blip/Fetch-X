@@ -2,11 +2,27 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235b4fe9'/%3E%3Cpath d='M19 10l-7-3.5L5 10l7 3.5L19 10z' fill='none' stroke='white' stroke-width='1.6' stroke-linejoin='round'/%3E%3Cpath d='M8.5 12.5v3c0 1 1.6 1.8 3.5 1.8s3.5-.8 3.5-1.8v-3' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SchoolAI</title>
+    <title>Fetch-X — Intelligent School Management</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:wght@600;700&display=swap" rel="stylesheet" />
+    <script>
+      /* Apply persisted light/dark mode before first paint (no flash). */
+      (function () {
+        try {
+          var m = localStorage.getItem('fx-mode');
+          if (m === 'dark') document.documentElement.setAttribute('data-mode', 'dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
+    <script>
+      /* Same check on <body> (runs before the deferred module script mounts React). */
+      try { if (localStorage.getItem('fx-mode') === 'dark') document.body.classList.add('dark'); } catch (e) {}
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

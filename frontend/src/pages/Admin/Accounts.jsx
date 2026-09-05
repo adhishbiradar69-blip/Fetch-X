@@ -6,10 +6,10 @@ import { Page, EASE, staggerContainer, staggerItem } from '../../lib/motion.jsx'
 import { CountUp, Toast } from '../../components/ui.jsx';
 
 const ROLES = [
-  { id: 'class_teacher', label: 'Class Teacher', Icon: UserCheck, desc: 'Teaches & marks one class' },
-  { id: 'principal', label: 'Principal', Icon: Briefcase, desc: 'Manages one school' },
-  { id: 'chairperson', label: 'Chairperson', Icon: Target, desc: 'Oversees multiple schools' },
-  { id: 'parent', label: 'Parent', Icon: Users, desc: 'Views their child\'s progress' },
+  { id: 'class_teacher', label: 'Class Teacher', accent: 'a-indigo', Icon: UserCheck, desc: 'Teaches & marks one class' },
+  { id: 'principal', label: 'Principal', accent: 'a-teal', Icon: Briefcase, desc: 'Manages one school' },
+  { id: 'chairperson', label: 'Chairperson', accent: 'a-amber', Icon: Target, desc: 'Oversees multiple schools' },
+  { id: 'parent', label: 'Parent', accent: 'a-pink', Icon: Users, desc: 'Views their child\'s progress' },
 ];
 
 export default function AccountCreation() {
@@ -86,14 +86,17 @@ export default function AccountCreation() {
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <div className="page-header">
-        <h2>Account Creation</h2>
-        <p>Create role-based accounts — no public registration</p>
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow">Fetch-X · Access Control</div>
+          <h1>Account Creation</h1>
+          <div className="subtitle">Create role-based accounts — no public registration</div>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 24 }} className="accounts-grid">
         {/* Create form */}
-        <div className="glass" style={{ padding: 28 }}>
+        <div className="card" style={{ padding: 24 }}>
           {/* Role picker */}
           <h3 className="section-title" style={{ marginBottom: 16 }}>Role</h3>
           <div className="role-picker">
@@ -189,7 +192,7 @@ export default function AccountCreation() {
         </div>
 
         {/* Accounts list */}
-        <div className="glass" style={{ padding: 24, maxHeight: '70vh', overflowY: 'auto' }} >
+        <div className="card" style={{ padding: 24, maxHeight: '70vh', overflowY: 'auto' }} >
           <h3 className="section-title">Accounts ({accounts.length})</h3>
           <motion.div variants={staggerContainer} initial="initial" animate="animate">
             <AnimatePresence>
@@ -205,11 +208,11 @@ export default function AccountCreation() {
                       </span>
                       <div>
                         <div style={{ fontWeight: 700 }}>{a.full_name || a.email}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{a.email}</div>
+                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>{a.email}</div>
                       </div>
                     </div>
                     <div className="account-meta">
-                      <span className="pill" style={{ background: '#ede9fe', color: '#6d28d9', fontSize: 10, textTransform: 'capitalize' }}>
+                      <span className="pill-tag" style={{ textTransform: 'capitalize' }}>
                         {a.role.replace('_', ' ')}
                       </span>
                       <button className="icon-del" onClick={() => del(a.id)} title="Delete"><Trash2 size={16} /></button>
@@ -223,21 +226,23 @@ export default function AccountCreation() {
         </div>
       </div>
 
-      <div className="stat-grid" style={{ marginTop: 24, gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
-        {ROLES.map(r => {
-          const count = accounts.filter(a => a.role === r.id).length;
-          const RoleIcon = r.Icon;
-          return (
-            <motion.div key={r.id} className="stat-card" whileHover={{ y: -4 }}>
-              <div className="stat-icon" style={{ background: '#f0eeea' }}>
-                <RoleIcon size={22} color="var(--accent)" />
-              </div>
-              <div style={{ fontSize: 30, fontWeight: 800 }}><CountUp value={count} /></div>
-              <div className="stat-label">{r.label}s</div>
-            </motion.div>
-          );
-        })}
-      </div>
+      <motion.div variants={staggerContainer} initial="initial" animate="animate" className="card" style={{ marginTop: 24 }}>
+        <div className="card-stats cols-4">
+          {ROLES.map(r => {
+            const count = accounts.filter(a => a.role === r.id).length;
+            const RoleIcon = r.Icon;
+            return (
+              <motion.div key={r.id} variants={staggerItem} className={`stat-cell ${r.accent}`}>
+                <div className="ic"><RoleIcon size={15} strokeWidth={2.2} /></div>
+                <div>
+                  <div className="k">{r.label}s</div>
+                  <div className="v"><CountUp value={count} /></div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      </motion.div>
     </Page>
   );
 }

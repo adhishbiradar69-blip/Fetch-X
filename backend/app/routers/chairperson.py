@@ -1,8 +1,10 @@
-from __future__ import annotations
 
 import json
 import statistics
+import threading
+import time as _time
 from collections import defaultdict
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,7 +14,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import require_role
 from app.rate_limit import limiter
+from app.models.attendance import Attendance
+from app.models.class_ import Class
 from app.models.school import School
+from app.models.student import Student
 from app.models.user import User
 from app.models.user_school import UserSchool
 from app.routers.principal import _gather_school_data  # reuse the heavy one-shot helper
@@ -46,6 +51,69 @@ def _gather_all_schools_data(db: Session, schools: list[School]) -> dict:
     for s in schools:
         per_school[s.id] = _gather_school_data(db, s)
     return per_school
+
+
+# ── tiny in-process TTL cache (stack policy: local memory caching only) ──────
+_GATHER_CACHE: dict[tuple, tuple] = {}
+_GATHER_TTL = 120.0  # seconds — seeded demo data is effectively static
+# Single-flight support: when several chairperson pages load in parallel on a
+# cold cache, each request used to compute its OWN copy of the multi-school
+# aggregation simultaneously — 4-5 concurrent pure-Python scans contending on
+# the GIL made every request take 45-55 s wall time. An in-flight Event per
+# key lets the losers wait for the winner's computation instead.
+_GATHER_INFLIGHT: dict[tuple, threading.Event] = {}
+_GATHER_LOCK = threading.Lock()
+
+
+def _gather_all_schools_data_cached(db: Session, schools: list[School]) -> dict:
+    """Memoized + single-flight wrapper around `_gather_all_schools_data`.
+
+    The multi-school aggregation scans ~300k rows, so every chairperson page
+    load otherwise pays 5-16 s. Keyed by the overseen school-id set, 120 s TTL.
+    Parallel cold callers share ONE in-flight computation (threading.Event),
+    then read the winner's cached result — measured effect: the worst parallel
+    cold burst drops from ~50 s per request to ~one computation total.
+    Cache hits return the SHARED snapshot directly (copying it via deepcopy
+    costs ~4 s for this structure, defeating the purpose) — every call site is
+    audited to be read-only (sorted()/min()/max()/sum() produce new lists), so
+    treat the returned dict as strictly read-only.
+    """
+    key = tuple(sorted(s.id for s in schools))
+    now = _time.monotonic()
+    hit = _GATHER_CACHE.get(key)
+    if hit is not None and now - hit[0] < _GATHER_TTL:
+        return hit[1]
+
+    with _GATHER_LOCK:
+        # double-check after acquiring the lock (another thread may have won)
+        hit = _GATHER_CACHE.get(key)
+        if hit is not None and _time.monotonic() - hit[0] < _GATHER_TTL:
+            return hit[1]
+        ev = _GATHER_INFLIGHT.get(key)
+        if ev is None:
+            ev = threading.Event()
+            _GATHER_INFLIGHT[key] = ev
+            winner = True
+        else:
+            winner = False
+
+    if winner:
+        try:
+            data = _gather_all_schools_data(db, schools)
+            _GATHER_CACHE[key] = (_time.monotonic(), data)
+            return data
+        finally:
+            with _GATHER_LOCK:
+                _GATHER_INFLIGHT.pop(key, None)
+            ev.set()
+
+    # loser: wait for the winner's computation, then serve the cached snapshot
+    ev.wait(timeout=90)
+    hit = _GATHER_CACHE.get(key)
+    if hit is not None:
+        return hit[1]
+    # extreme fallback (winner crashed before caching): compute inline
+    return _gather_all_schools_data(db, schools)
 
 
 def _school_public_summary(school: School, data: dict) -> dict:
@@ -97,7 +165,7 @@ def overview(db: Session = Depends(get_db), user=Depends(_allowed)):
     schools = _schools_of(user, db)
     if not schools:
         raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
-    per_school = _gather_all_schools_data(db, schools)
+    per_school = _gather_all_schools_data_cached(db, schools)
 
     summaries = [_school_public_summary(s, per_school[s.id]) for s in schools]
     total_students = sum(s["students"] for s in summaries)
@@ -167,13 +235,80 @@ def schools(db: Session = Depends(get_db), user=Depends(_allowed)):
     schools = _schools_of(user, db)
     if not schools:
         raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
-    per_school = _gather_all_schools_data(db, schools)
+    per_school = _gather_all_schools_data_cached(db, schools)
     out = []
     for s in schools:
         summary = _school_public_summary(s, per_school[s.id])
         summary["attendance_rate"] = _school_attendance_rate(per_school[s.id])
         out.append(summary)
     return out
+
+
+@router.get("/trends")
+def attendance_trends(weeks: int = 6, db: Session = Depends(get_db), user=Depends(_allowed)):
+    """Per-week attendance % for EVERY overseen school over the last
+    `weeks` (1-12) Mon-Fri windows, oldest → newest.
+
+    One joined lean query over the whole window (school_id, date, status —
+    ~5k rows for the demo), bucketed per school per Monday in Python.
+    Deliberately does NOT reuse `_gather_school_data`: the command-center
+    gather pulls all marks + exams, which is orders of magnitude heavier
+    than the three attendance fields this endpoint needs. Gives the
+    chairperson their first TEMPORAL view of the portfolio.
+    """
+    weeks = min(max(weeks, 1), 12)
+    schools = _schools_of(user, db)
+    if not schools:
+        raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
+    school_ids = [s.id for s in schools]
+    name_by_id = {s.id: s.name for s in schools}
+
+    today = date.today()
+    current_monday = today - timedelta(days=today.weekday())
+    window_start = current_monday - timedelta(days=7 * (weeks - 1))
+    window_end = current_monday + timedelta(days=4)
+
+    monday_keys = [window_start + timedelta(days=7 * i) for i in range(weeks)]
+    key_set = set(m.isoformat() for m in monday_keys)
+    # buckets[school_id][monday_iso] = {marked, present}
+    buckets: dict[int, dict[str, dict[str, int]]] = {sid: {} for sid in school_ids}
+    for sid in school_ids:
+        buckets[sid] = {m.isoformat(): {"marked": 0, "present": 0} for m in monday_keys}
+
+    rows = (db.query(Class.school_id, Attendance.date, Attendance.status)
+            .join(Student, Student.class_id == Class.id)
+            .join(Attendance, Attendance.student_id == Student.id)
+            .filter(Class.school_id.in_(school_ids),
+                    Attendance.date >= window_start, Attendance.date <= window_end)
+            .all())
+    for sid, dt, st in rows:
+        key = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+        if key not in key_set:
+            continue
+        b = buckets[sid][key]
+        b["marked"] += 1
+        if st == "P":
+            b["present"] += 1
+
+    mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    out = []
+    for sid in school_ids:
+        wk = []
+        for m in monday_keys:
+            b = buckets[sid][m.isoformat()]
+            pct = round(b["present"] / b["marked"] * 100, 1) if b["marked"] else None
+            wk.append({
+                "start": m.isoformat(),
+                "label": f"{mo[m.month - 1]} {m.day}",
+                "marked": b["marked"],
+                "present": b["present"],
+                "pct": pct,
+            })
+        out.append({"school_id": sid, "name": name_by_id[sid], "weeks": wk})
+    return {
+        "window": [{"start": m.isoformat(), "label": f"{mo[m.month - 1]} {m.day}"} for m in monday_keys],
+        "schools": out,
+    }
 
 
 @router.get("/compare")
@@ -183,7 +318,7 @@ def compare(db: Session = Depends(get_db), user=Depends(_allowed)):
     schools = _schools_of(user, db)
     if not schools:
         raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
-    per_school = _gather_all_schools_data(db, schools)
+    per_school = _gather_all_schools_data_cached(db, schools)
 
     # union of all subjects and grades across schools
     all_subject_ids: set[int] = set()
@@ -260,7 +395,7 @@ def rankings(db: Session = Depends(get_db), user=Depends(_allowed)):
     schools = _schools_of(user, db)
     if not schools:
         raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
-    per_school = _gather_all_schools_data(db, schools)
+    per_school = _gather_all_schools_data_cached(db, schools)
     summaries = []
     for s in schools:
         data = per_school[s.id]
@@ -312,7 +447,7 @@ def insights(db: Session = Depends(get_db), user=Depends(_allowed)):
     schools = _schools_of(user, db)
     if not schools:
         raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
-    per_school = _gather_all_schools_data(db, schools)
+    per_school = _gather_all_schools_data_cached(db, schools)
     out: list[dict] = []
 
     summaries = []
@@ -573,7 +708,7 @@ async def ai_analyze(request: Request, body: AnalyzeBody, db: Session = Depends(
     schools = _schools_of(user, db)
     if not schools:
         raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
-    per_school = _gather_all_schools_data(db, schools)
+    per_school = _gather_all_schools_data_cached(db, schools)
     snapshot = _build_chair_snapshot(per_school, schools)
 
     if not question:

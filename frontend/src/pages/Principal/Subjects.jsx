@@ -33,10 +33,12 @@ export default function PrincipalSubjects() {
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}
-      <div className="page-header-pro">
-        <div className="breadcrumb"><a href="/principal/dashboard">Dashboard</a> / Subjects</div>
-        <h2>Subject Analytics</h2>
-        <p>Performance across all {subjects.length} subjects — click any subject for a deep dive</p>
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow"><a href="/principal/dashboard">Dashboard</a> / Subjects</div>
+          <h1>Subject Analytics</h1>
+          <div className="subtitle">Performance across all {subjects.length} subjects — click any subject for a deep dive</div>
+        </div>
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,marginBottom:24}} className="two-col-charts">
@@ -45,10 +47,10 @@ export default function PrincipalSubjects() {
           <div style={{width:'100%',height:280}}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={subjectData} margin={{top:10,right:10,left:-20,bottom:0}}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,210,230,0.3)" />
-                <XAxis dataKey="name" tick={{fontSize:11,fill:'var(--text-secondary)'}} />
-                <YAxis domain={[0,100]} tick={{fontSize:12,fill:'var(--text-secondary)'}} />
-                <Tooltip contentStyle={{borderRadius:12,fontSize:13}} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(143,146,171,0.28)" />
+                <XAxis dataKey="name" tick={{fontSize:11,fill:'#8f92ab'}} />
+                <YAxis domain={[0,100]} tick={{fontSize:12,fill:'#8f92ab'}} />
+                <Tooltip contentStyle={{borderRadius:12,border:'1px solid var(--line)',background:'var(--surf)',fontSize:13}} />
                 <Bar dataKey="avg" radius={[8,8,0,0]} onClick={(d)=>viewSubject(d.id)} cursor="pointer">
                   {subjectData.map((d,i) => <Cell key={i} fill={d.color} />)}
                 </Bar>
@@ -61,10 +63,10 @@ export default function PrincipalSubjects() {
           <div style={{width:'100%',height:280}}>
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={subjectData.map(s => ({subject:s.name, avg:s.avg}))}>
-                <PolarGrid stroke="rgba(200,210,230,0.4)" />
-                <PolarAngleAxis dataKey="subject" tick={{fontSize:10,fill:'var(--text-secondary)'}} />
-                <PolarRadiusAxis domain={[0,100]} tick={{fontSize:10,fill:'var(--text-muted)'}} />
-                <Radar dataKey="avg" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.3} strokeWidth={2} />
+                <PolarGrid stroke="rgba(143,146,171,0.35)" />
+                <PolarAngleAxis dataKey="subject" tick={{fontSize:10,fill:'#8f92ab'}} />
+                <PolarRadiusAxis domain={[0,100]} tick={{fontSize:10,fill:'#8f92ab'}} />
+                <Radar dataKey="avg" stroke="#5b4fe9" fill="#5b4fe9" fillOpacity={0.3} strokeWidth={2} />
               </RadarChart>
             </ResponsiveContainer>
           </div>
@@ -87,8 +89,8 @@ export default function PrincipalSubjects() {
                 </td>
                 <td style={{textAlign:'center',fontWeight:700,color:gradeColor(s.avg)}}>{s.avg}%</td>
                 <td style={{textAlign:'center'}}>{s.pass}%</td>
-                <td style={{textAlign:'center',color:'var(--text-muted)'}}>—</td>
-                <td style={{textAlign:'center'}}>{s.avg >= 70 ? <span className="pill-tag" style={{background:'rgba(16,185,129,0.12)',color:'#16a34a'}}>Strong</span> : s.avg >= 50 ? <span className="pill-tag" style={{background:'rgba(245,158,11,0.12)',color:'#d97706'}}>Average</span> : <span className="pill-tag" style={{background:'rgba(239,68,68,0.12)',color:'#dc2626'}}>Weak</span>}</td>
+                <td style={{textAlign:'center',color:'var(--muted)'}}>—</td>
+                <td style={{textAlign:'center'}}>{s.avg >= 70 ? <span className="pill-tag" style={{background:'rgba(16,185,129,.14)',color:'#0b7a5c'}}>Strong</span> : s.avg >= 50 ? <span className="pill-tag" style={{background:'rgba(180,95,4,.16)',color:'#b45f04'}}>Average</span> : <span className="pill-tag" style={{background:'rgba(220,38,38,.14)',color:'#ef4444'}}>Weak</span>}</td>
                 <td><ChevronRight size={14} color="var(--text-muted)" /></td>
               </motion.tr>
             ))}

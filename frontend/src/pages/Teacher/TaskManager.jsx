@@ -59,32 +59,32 @@ export default function TaskManager() {
   const getRate = (studs) => !studs.length ? 0 : Math.round(studs.filter(s => s.status === 'completed').length / studs.length * 100);
   const getStatusStyle = (status) => {
     if (status === 'completed') return { bg: '#d1fae5', color: '#047857', border: '#10b981', label: 'Done', Icon: Check };
-    if (status === 'late') return { bg: '#fee2e2', color: '#b91c1c', border: '#ef4444', label: 'Late', Icon: X };
-    return { bg: '#f1f5f9', color: '#64748b', border: '#e2e8f0', label: 'Pending', Icon: Circle };
+    if (status === 'late') return { bg: '#fdeaea', color: '#b91c1c', border: '#ef4444', label: 'Late', Icon: X };
+    return { bg: 'var(--chip)', color: 'var(--muted)', border: 'var(--line)', label: 'Pending', Icon: Circle };
   };
 
   if (!classId) return (
-    <Page><div className="glass" style={{ textAlign: 'center', padding: 60, marginTop: 40 }}>
+    <Page><div className="card" style={{ textAlign: 'center', padding: 60, marginTop: 40 }}>
       <AlertTriangle size={48} color="#d97706" style={{ marginBottom: 16 }} />
       <h3 style={{ fontSize: 20, fontWeight: 700 }}>No Class Assigned</h3>
-      <p style={{ color: 'var(--text-secondary)' }}>Contact administrator.</p>
+      <p style={{ color: 'var(--body-text)' }}>Contact administrator.</p>
     </div></Page>
   );
 
   if (loading && !tasks.length && !showForm) return (
     <Page><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
-      <p style={{ color: 'var(--text-secondary)' }}>Loading tasks...</p>
+      <p style={{ color: 'var(--body-text)' }}>Loading tasks...</p>
     </div></Page>
   );
 
   if (showForm) return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <div className="page-header"><h2>Create New Task</h2><p>Set up an assignment for your class</p></div>
-      <motion.div className="glass form-card" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: EASE }}
+      <div className="pagehead"><div><div className="eyebrow">Fetch-X · Class Teacher</div><h1>Create New Task</h1><div className="subtitle">Set up an assignment for your class</div></div></div>
+      <motion.div className="card form-card" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: EASE }}
         style={{ padding: 0, maxWidth: 720 }}>
-        <div style={{ padding: '32px 36px', borderBottom: '1px solid var(--border)' }}>
-          <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 1 }}>Task Details</h3>
+        <div style={{ padding: '32px 36px', borderBottom: '1px solid var(--line)' }}>
+          <h3 style={{ fontSize: 12, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1 }}>Task Details</h3>
           <div className="form-header-line" style={{ maxWidth: 80 }} />
         </div>
         <form onSubmit={createTask} style={{ padding: '32px 36px' }}>
@@ -102,11 +102,11 @@ export default function TaskManager() {
                 {subjects.map((sub) => (
                   <motion.button key={sub.id} type="button" onClick={() => setSelectedSubject(String(sub.id))}
                     whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                    style={{ padding: '10px 20px', borderRadius: 24, fontSize: 14, fontWeight: 600, cursor: 'pointer',
-                      background: selectedSubject === String(sub.id) ? sub.color : 'rgba(255,255,255,0.6)',
-                      color: selectedSubject === String(sub.id) ? 'white' : '#64748b',
-                      boxShadow: selectedSubject === String(sub.id) ? '0 4px 16px rgba(0,0,0,0.18)' : '0 1px 3px rgba(0,0,0,0.05)',
-                      border: selectedSubject === String(sub.id) ? 'none' : '1.5px solid var(--border-strong)' }}>
+                    style={{ padding: '10px 20px', borderRadius: 999, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                      background: selectedSubject === String(sub.id) ? sub.color : 'var(--surf)',
+                      color: selectedSubject === String(sub.id) ? 'white' : 'var(--muted)',
+                      boxShadow: selectedSubject === String(sub.id) ? '2px 3px 0 var(--shadow)' : 'none',
+                      border: selectedSubject === String(sub.id) ? '1px solid transparent' : '1.5px solid var(--line)' }}>
                     {sub.name}
                   </motion.button>
                 ))}
@@ -116,7 +116,7 @@ export default function TaskManager() {
           <div className="form-field" style={{ marginBottom: 32 }}>
             <label className="field-label">Due Date</label>
             <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="input input-glow" style={{ width: 'auto', fontSize: 15, padding: '12px 18px' }} />
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>Optional — leave blank if no deadline</p>
+            <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>Optional — leave blank if no deadline</p>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
             <button type="button" onClick={() => { setTaskTitle(''); setDueDate(''); setShowForm(false); }} className="btn btn-secondary" style={{ padding: '12px 32px' }}>Cancel</button>
@@ -132,15 +132,15 @@ export default function TaskManager() {
   return (
     <Page>
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <div className="page-header"><h2>Tasks</h2><p>Assignments for your class</p></div>
+      <div className="pagehead"><div><div className="eyebrow">Fetch-X · Class Teacher</div><h1>Tasks</h1><div className="subtitle">Assignments for your class</div></div></div>
       <div style={{ marginBottom: 28 }}>
         <motion.button onClick={() => setShowForm(true)} className="btn btn-primary" whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }} style={{ padding: '12px 28px', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Plus size={16} /> New Task</motion.button>
       </div>
 
       {tasks.length === 0 ? (
-        <motion.div className="glass" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} style={{ textAlign: 'center', padding: 60 }}>
-          <motion.div style={{ marginBottom: 16, display: 'flex', justifyContent: 'center' }} animate={{ y: [0, -8, 0] }} transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}><FileText size={48} color="var(--text-muted)" /></motion.div>
-          <p style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>No tasks yet. Create one above!</p>
+        <motion.div className="card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} style={{ textAlign: 'center', padding: 60 }}>
+          <motion.div style={{ marginBottom: 16, display: 'flex', justifyContent: 'center' }} animate={{ y: [0, -8, 0] }} transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}><FileText size={48} color="var(--muted)" /></motion.div>
+          <p style={{ color: 'var(--body-text)', fontWeight: 500 }}>No tasks yet. Create one above!</p>
         </motion.div>
       ) : (
         <motion.div variants={staggerContainer} initial="initial" animate="animate" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -148,27 +148,27 @@ export default function TaskManager() {
             const rate = getRate(task.students);
             const isExpanded = expandedTask === task.task_id;
             return (
-              <motion.div key={task.task_id} variants={staggerItem} className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+              <motion.div key={task.task_id} variants={staggerItem} className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <motion.div
                   onClick={() => setExpandedTask(isExpanded ? null : task.task_id)}
-                  whileHover={{ backgroundColor: 'rgba(79,125,243,0.02)' }}
+                  whileHover={{ backgroundColor: 'var(--hov)' }}
                   style={{ padding: '20px 24px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderLeft: `4px solid ${task.subject.color}` }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                      <span style={{ padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: `${task.subject.color}15`, color: task.subject.color, textTransform: 'uppercase', letterSpacing: 0.5 }}>{task.subject.name}</span>
-                      {task.due_date && <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 500 }}>Due {task.due_date}</span>}
+                      <span className="teach-pill" style={{ background: `${task.subject.color}15`, color: task.subject.color, borderColor: 'transparent', textTransform: 'uppercase', letterSpacing: .5 }}>{task.subject.name}</span>
+                      {task.due_date && <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 500 }}>Due {task.due_date}</span>}
                     </div>
-                    <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>{task.title}</h3>
+                    <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>{task.title}</h3>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                     <div style={{ textAlign: 'right' }}>
-                      <motion.div style={{ fontSize: 24, fontWeight: 800, color: rate === 100 ? '#10b981' : task.subject.color }}
+                      <motion.div style={{ fontSize: 24, fontWeight: 800, color: rate === 100 ? 'var(--teal)' : task.subject.color }}
                         key={rate} initial={{ scale: 0.6 }} animate={{ scale: 1 }} transition={SPRING}>{rate}%</motion.div>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Done</div>
+                      <div className="stat-label" style={{ marginTop: 0 }}>Done</div>
                     </div>
                     <motion.button onClick={(e) => { e.stopPropagation(); deleteTask(task.task_id); }} whileHover={{ scale: 1.2 }} whileTap={{ scale: 0.9 }}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Trash2 size={16} /></motion.button>
-                    <motion.span animate={{ rotate: isExpanded ? 180 : 0 }} transition={SPRING} style={{ display: 'inline-flex', color: 'var(--text-muted)' }}><ChevronDown size={20} /></motion.span>
+                      style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Trash2 size={16} /></motion.button>
+                    <motion.span animate={{ rotate: isExpanded ? 180 : 0 }} transition={SPRING} style={{ display: 'inline-flex', color: 'var(--muted)' }}><ChevronDown size={20} /></motion.span>
                   </div>
                 </motion.div>
 
@@ -176,7 +176,7 @@ export default function TaskManager() {
                   {isExpanded && (
                     <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
                       transition={{ duration: 0.35, ease: EASE }} style={{ overflow: 'hidden' }}>
-                      <div style={{ borderTop: '1px solid var(--border)', padding: '16px 24px 24px', background: '#fafafa' }}>
+                      <div style={{ borderTop: '1px solid var(--line)', padding: '16px 24px 24px', background: 'var(--head)' }}>
                         <div className="table-wrap">
                           <table>
                             <thead><tr><th>Student</th><th style={{ width: 140, textAlign: 'center' }}>Status</th></tr></thead>

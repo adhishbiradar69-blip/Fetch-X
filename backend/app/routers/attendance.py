@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from datetime import date
+from datetime import date, timedelta
+from typing import Optional
 from app.database import get_db
 from app.models.attendance import Attendance
 from app.models.student import Student
@@ -32,6 +33,12 @@ def mark_attendance(data: AttendanceBulkCreate, db: Session = Depends(get_db), u
         existing = db.query(Attendance).filter(
             Attendance.student_id == mark.student_id, Attendance.date == data.date
         ).first()
+        if not mark.status:
+            # UNMARK contract: null/empty status removes the record entirely
+            # (used by the week board's Clear-week tool)
+            if existing:
+                db.delete(existing)
+            continue
         if existing:
             existing.status = mark.status
             existing.marked_by = user.id
@@ -56,6 +63,142 @@ def get_class_attendance(class_id: int, date: date, db: Session = Depends(get_db
         "students": [{"id": s.id, "name": s.name, "status": att_map.get(s.id, "Not Marked")}
                      for s in students]
     }
+
+
+@router.get("/week/{class_id}")
+def get_class_week(class_id: int, start: Optional[date] = None,
+                   db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Mon-Fri attendance grid for the week containing `start` (default today).
+
+    Returns one row per student with a status list aligned to `days`
+    (None = not marked) plus a per-student week rate, so the class teacher's
+    weekly board can render the whole week in one request.
+    """
+    anchor = start or date.today()
+    monday = anchor - timedelta(days=anchor.weekday())
+    days = [monday + timedelta(days=i) for i in range(5)]  # Mon..Fri
+    day_keys = [d.isoformat() for d in days]
+
+    students = db.query(Student).filter(Student.class_id == class_id).order_by(Student.id).all()
+    ids = [s.id for s in students]
+    by_sid: dict[int, dict[str, str]] = {}
+    if ids:
+        records = (db.query(Attendance.student_id, Attendance.date, Attendance.status)
+                   .filter(Attendance.student_id.in_(ids),
+                           Attendance.date >= days[0], Attendance.date <= days[-1])
+                   .all())
+        for sid, dt, st in records:
+            key = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+            by_sid.setdefault(sid, {})[key] = st
+
+    rows = []
+    for s in students:
+        cell = by_sid.get(s.id, {})
+        statuses = [cell.get(k) for k in day_keys]
+        marked = [x for x in statuses if x is not None]
+        present = sum(1 for x in marked if x == "P")
+        rows.append({
+            "id": s.id, "name": s.name, "days": statuses,
+            "week_rate": round(present / len(marked) * 100, 0) if marked else None,
+        })
+    return {"start": day_keys[0], "days": day_keys, "students": rows}
+
+
+@router.get("/trend/{class_id}")
+def get_attendance_trend(class_id: int, weeks: int = 6,
+                         db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Per-week present% for the last `weeks` (1-12) Mon-Fri windows,
+    oldest → newest, current week last. Feeds the principal's attendance
+    trend sparkline — one grouped query, week bucketing done in Python."""
+    weeks = min(max(weeks, 1), 12)
+    today = date.today()
+    current_monday = today - timedelta(days=today.weekday())
+    window_start = current_monday - timedelta(days=7 * (weeks - 1))
+    window_end = current_monday + timedelta(days=4)  # Friday of current week
+
+    ids = [s.id for s in db.query(Student.id).filter(Student.class_id == class_id).all()]
+    # Monday key per bucket for O(1) classification
+    monday_keys = [window_start + timedelta(days=7 * i) for i in range(weeks)]
+    key_set = set(m.isoformat() for m in monday_keys)
+    buckets: dict[str, dict[str, int]] = {m.isoformat(): {"marked": 0, "present": 0} for m in monday_keys}
+
+    if ids:
+        records = (db.query(Attendance.date, Attendance.status)
+                   .filter(Attendance.student_id.in_(ids),
+                           Attendance.date >= window_start, Attendance.date <= window_end)
+                   .all())
+        for dt, st in records:
+            key = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+            # attendance lives Mon-Fri only, so date lands exactly on a bucket monday
+            if key not in key_set:
+                continue
+            b = buckets[key]
+            b["marked"] += 1
+            if st == "P":
+                b["present"] += 1
+
+    mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    out = []
+    for m in monday_keys:
+        b = buckets[m.isoformat()]
+        pct = round(b["present"] / b["marked"] * 100, 1) if b["marked"] else None
+        out.append({
+            "start": m.isoformat(),
+            "label": f"{mo[m.month - 1]} {m.day}",
+            "marked": b["marked"],
+            "present": b["present"],
+            "pct": pct,
+        })
+    return {"weeks": out}
+
+
+@router.get("/student-trend/{student_id}")
+def get_student_attendance_trend(student_id: int, weeks: int = 6,
+                                 db: Session = Depends(get_db),
+                                 user=Depends(get_current_user)):
+    """Per-week present% for ONE student over the last `weeks` (1-12)
+    Mon-Fri windows, oldest → newest, current week last. Powers the tiny
+    sparkline next to each follow-up student pill on the principal's
+    attendance explorer — same bucketing contract as /trend/{class_id}."""
+    weeks = min(max(weeks, 1), 12)
+    if not db.query(Student.id).filter(Student.id == student_id).first():
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    today = date.today()
+    current_monday = today - timedelta(days=today.weekday())
+    window_start = current_monday - timedelta(days=7 * (weeks - 1))
+    window_end = current_monday + timedelta(days=4)
+
+    monday_keys = [window_start + timedelta(days=7 * i) for i in range(weeks)]
+    key_set = set(m.isoformat() for m in monday_keys)
+    buckets: dict[str, dict[str, int]] = {m.isoformat(): {"marked": 0, "present": 0} for m in monday_keys}
+
+    records = (db.query(Attendance.date, Attendance.status)
+               .filter(Attendance.student_id == student_id,
+                       Attendance.date >= window_start, Attendance.date <= window_end)
+               .all())
+    for dt, st in records:
+        key = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+        if key not in key_set:
+            continue
+        b = buckets[key]
+        b["marked"] += 1
+        if st == "P":
+            b["present"] += 1
+
+    mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    out = []
+    for m in monday_keys:
+        b = buckets[m.isoformat()]
+        pct = round(b["present"] / b["marked"] * 100, 1) if b["marked"] else None
+        out.append({
+            "start": m.isoformat(),
+            "label": f"{mo[m.month - 1]} {m.day}",
+            "marked": b["marked"],
+            "present": b["present"],
+            "pct": pct,
+        })
+    return {"student_id": student_id, "weeks": out}
 
 
 @router.get("/summary/{class_id}")

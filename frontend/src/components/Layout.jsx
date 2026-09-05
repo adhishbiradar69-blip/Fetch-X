@@ -3,12 +3,13 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ClipboardList, CheckSquare, PenLine, BarChart3, Building2, GraduationCap,
-  KeyRound, Briefcase, Target, Users, ChevronLeft, ChevronRight, LogOut,
-  BookOpen, AlertTriangle, GitCompare, Award, Search,
+  KeyRound, Briefcase, Target, Users, ChevronRight, LogOut, GitCompare, Award,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { EASE, SPRING } from '../lib/motion.jsx';
+import { EASE } from '../lib/motion.jsx';
 import ThemeSelector from './ThemeSelector.jsx';
+import ShortcutsOverlay from './ShortcutsOverlay.jsx';
+import { Logo } from './Logo.jsx';
 
 const A = ['super_admin', 'school_admin', 'admin'];
 const allNavGroups = [
@@ -36,11 +37,8 @@ const allNavGroups = [
     roles: ['principal', ...A],
     items: [
       { path: '/principal/dashboard', label: 'Dashboard', icon: Briefcase },
-      { path: '/principal/students', label: 'Students', icon: Search },
-      { path: '/principal/grades', label: 'Grades', icon: BarChart3 },
-      { path: '/principal/subjects', label: 'Subjects', icon: BookOpen },
-      { path: '/principal/at-risk', label: 'At-Risk', icon: AlertTriangle },
-      { path: '/principal/compare', label: 'Compare', icon: GitCompare },
+      /* v5 consolidation: students/grades/subjects/at-risk/attendance/compare
+         pages were folded INTO the dashboard (sections + modals). */
     ]
   },
   {
@@ -61,6 +59,17 @@ const allNavGroups = [
   },
 ];
 
+/* Per-group accent colors (designer's level palette):
+   Administration = lvl-1 indigo, Class Teacher = lvl-3 amber,
+   Principal = lvl-2 teal, Chairperson = lvl-4 pink, Parents = lvl-5 cyan. */
+const GROUP_COLOR = {
+  'Administration': '#4f42dd',
+  'Class Teacher': '#b45f04',
+  'Principal': '#0c7a6b',
+  'Chairperson': '#c2255c',
+  'Parents': '#0e7490',
+};
+
 const roleLabel = { super_admin: 'Super Admin', school_admin: 'School Admin', admin: 'Administrator',
                    principal: 'Principal', chairperson: 'Chairperson',
                    class_teacher: 'Class Teacher', parent: 'Parent' };
@@ -78,75 +87,65 @@ export default function Layout({ children }) {
 
   return (
     <div className={`app-layout ${collapsed ? 'sidebar-collapsed' : ''}`}>
-      {/* Ambient orbs behind everything */}
-      <div className="ambient-orbs" aria-hidden="true">
-        <span className="orb orb-1" />
-        <span className="orb orb-2" />
-        <span className="orb orb-3" />
-      </div>
-
       <motion.aside
         className="sidebar"
         initial={{ x: -20, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ duration: 0.5, ease: EASE }}
       >
-        <div className="sidebar-brand">
-          <div className="brand-text">
-            {!collapsed ? (
-              <>
-                <h1>SchoolAI</h1>
-                <p>Intelligent Management</p>
-              </>
-            ) : (
-              <h1 className="brand-logo">S</h1>
-            )}
-          </div>
-          <button className="sidebar-toggle" onClick={() => setCollapsed(!collapsed)}
-            title={collapsed ? 'Expand' : 'Collapse'}>
-            {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+        <div className="sb-brand">
+          <Logo size={22} />
+          <span className="brand-name">FETCH-X</span>
+          <button
+            className="chev"
+            onClick={() => setCollapsed(!collapsed)}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label="Toggle sidebar"
+          >
+            <ChevronRight size={14} strokeWidth={2.4} />
           </button>
         </div>
 
-        <nav className="sidebar-nav">
-          {visibleGroups.map((group) => (
-            <div key={group.label} className="nav-group">
-              {!collapsed && <div className="nav-group-label">{group.label}</div>}
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <NavLink key={item.path} to={item.path}
-                    className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                    title={collapsed ? item.label : ''}>
-                    {({ isActive }) => (
-                      <>
-                        {isActive && (
-                          <motion.span layoutId="nav-active-pill" className="nav-active-pill"
-                            transition={SPRING} />
-                        )}
-                        <span className="nav-icon"><Icon size={18} strokeWidth={2} /></span>
-                        {!collapsed && <span className="nav-text">{item.label}</span>}
-                      </>
-                    )}
-                  </NavLink>
-                );
-              })}
-            </div>
-          ))}
+        <nav className="sb-nav">
+          {visibleGroups.map((group) => {
+            const color = GROUP_COLOR[group.label] || '#4f42dd';
+            return (
+              <div key={group.label} className="nav-group">
+                {!collapsed && <div className="nav-group-label">{group.label}</div>}
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <NavLink key={item.path} to={item.path}
+                      className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                      style={{ '--nc': color }}
+                      data-tip={item.label}
+                      title={collapsed ? '' : undefined}
+                    >
+                      <span className="nav-icon"><Icon strokeWidth={2} /></span>
+                      {!collapsed && <span className="nav-text">{item.label}</span>}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            );
+          })}
         </nav>
 
-        <div className={`sidebar-footer ${collapsed ? 'hidden' : ''}`}>
-          <div className="footer-user">
-            <p className="footer-label">Signed in as</p>
-            <p className="footer-email">{user?.full_name || user?.email || 'User'}</p>
-            <p className="footer-role">{roleLabel[userRole] || userRole}</p>
-          </div>
-          <div className="footer-theme-wrap">
+        <div className="sidebar-footer">
+          {!collapsed && (
+            <div className="footer-user">
+              <p className="footer-label">Signed in as</p>
+              <p className="footer-email">{user?.full_name || user?.email || 'User'}</p>
+              <p className="footer-role">{roleLabel[userRole] || userRole}</p>
+            </div>
+          )}
+          <div className="footer-actions">
             <ThemeSelector />
+            <button onClick={handleLogout} className="btn-sign-out" title="Sign Out">
+              <LogOut size={15} strokeWidth={2.2} />
+              {!collapsed && <span>Sign Out</span>}
+            </button>
           </div>
-          <button onClick={handleLogout} className="btn btn-ghost btn-sign-out">
-            <LogOut size={16} /> <span>Sign Out</span>
-          </button>
         </div>
       </motion.aside>
 
@@ -159,6 +158,7 @@ export default function Layout({ children }) {
           </motion.div>
         </AnimatePresence>
       </main>
+      <ShortcutsOverlay />
     </div>
   );
 }
