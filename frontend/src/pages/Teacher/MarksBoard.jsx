@@ -37,7 +37,14 @@ export default function MarksBoard() {
   const [focusedCell, setFocusedCell] = useState(null); // { sid, subId } → row/col highlight in the entry grid
 
   const inputRefs = useRef({});
-  const showToast = (m, t = 'success') => { setToast({ message: m, type: t }); setTimeout(() => setToast(null), 2600); };
+  const toastTimer = useRef(null);
+  const showToast = useCallback((m, t = 'success') => {
+    setToast({ message: m, type: t });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2600);
+  }, []);
+  useEffect(() => () => toastTimer.current && clearTimeout(toastTimer.current), []);
+  const [loadError, setLoadError] = useState(false);
 
   /* remember the chosen exam for this class across visits (per tab session) */
   useEffect(() => { try { if (selectedExam) sessionStorage.setItem(`fx-marks-exam-${classId}`, selectedExam); } catch { /* private mode */ } }, [selectedExam, classId]);
@@ -46,6 +53,7 @@ export default function MarksBoard() {
 
   const init = async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       // Only load exams first (the marks response carries students + subjects).
       // NOTE: we deliberately do NOT call /attendance/class/{id} here because it
@@ -55,7 +63,10 @@ export default function MarksBoard() {
       if (exRes.data.length) {
         setSelectedExam(prev => (prev && exRes.data.some(e => String(e.id) === String(prev))) ? prev : String(exRes.data[0].id));
       }
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      setLoadError(true); // distinguish "no exams" from "request failed" (M2)
+    }
     setLoading(false);
   };
 
@@ -63,12 +74,16 @@ export default function MarksBoard() {
 
   const fetchMarks = async () => {
     setMarksLoading(true);
+    // stale-response guard: switching exams quickly must never render the
+    // previous exam's marks (M3)
+    const reqExam = selectedExam;
     try {
-      const res = await api.get(`/academics/class/${classId}/marks?exam_id=${selectedExam}`);
+      const res = await api.get(`/academics/class/${classId}/marks?exam_id=${reqExam}`);
+      if (String(reqExam) !== String(selectedExam)) return; // a newer exam was picked
       setExamData(res.data);
       setSubjects(res.data.subjects);
       setStudents(res.data.students.map(s => ({ id: s.id, name: s.name })));
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); showToast('Failed to load marks for this exam', 'error'); }
     setMarksLoading(false);
   };
 
@@ -264,7 +279,12 @@ export default function MarksBoard() {
           </select>
           {examData && <span className="filter-label" style={{ fontSize: 10, background: 'var(--lav)', color: 'var(--brand)', padding: '4px 10px', borderRadius: 999 }}>MAX {maxScore}</span>}
         </div>
-        {exams.length === 0 ? (
+        {loadError ? (
+          <span style={{ fontSize: 13, color: '#ef4444', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            Couldn't load exams.
+            <button onClick={init} className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }}>Retry</button>
+          </span>
+        ) : exams.length === 0 ? (
           <span style={{ fontSize: 13, color: '#ef4444', fontWeight: 600 }}>No exams configured for this grade. Ask admin to create one.</span>
         ) : selectedExam && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -278,7 +298,14 @@ export default function MarksBoard() {
         )}
       </div>
 
-      {!exams.length ? (
+      {loadError ? (
+        <div className="card" style={{ padding: 50, textAlign: 'center' }}>
+          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'center' }}><FileText size={40} color="#ef4444" /></div>
+          <p style={{ color: 'var(--body-text)', fontSize: 15, marginBottom: 8 }}>Couldn't reach the server to load exams.</p>
+          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 14 }}>Check your connection, then try again.</p>
+          <button onClick={init} className="btn btn-primary" style={{ fontSize: 13 }}>Retry</button>
+        </div>
+      ) : !exams.length ? (
         <div className="card" style={{ padding: 50, textAlign: 'center' }}>
           <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'center' }}><FileText size={40} color="var(--muted)" /></div>
           <p style={{ color: 'var(--body-text)', fontSize: 15, marginBottom: 8 }}>No exams configured for this class's grade.</p>
@@ -308,11 +335,16 @@ export default function MarksBoard() {
               </tr>
             </thead>
             <tbody>
+              {students.length === 0 && (
+                <tr><td colSpan={subjects.length + 3} style={{ textAlign: 'center', padding: '32px 20px', color: 'var(--muted)' }}>
+                  No students in this class yet.
+                </td></tr>
+              )}
               {students.map((s, i) => {
                 const stData = examData.students.find(st => st.id === s.id);
                 const avg = studentAvg(s);
                 return (
-                  <motion.tr key={s.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }}>
+                  <motion.tr key={s.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(i * 0.02, 0.4) }}>
                     <td style={{ textAlign: 'center', color: 'var(--muted)', fontWeight: 600, fontSize: 13 }}>{i + 1}</td>
                     <td style={{ fontWeight: 600, fontSize: 15 }}>{s.name}</td>
                     {subjects.map(sub => {

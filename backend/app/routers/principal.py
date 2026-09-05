@@ -37,19 +37,24 @@ _allowed = require_role("principal", "super_admin", "school_admin")
 # ─────────────────────────────────────────────────────────────────────────────
 def _school_of(user: User, db: Session) -> School:
     """Return the school the principal/admin is acting on."""
-    if user.role in ("super_admin", "school_admin"):
-        if user.school_id:
-            s = db.query(School).filter(School.id == user.school_id).first()
-            if s:
-                return s
-        # super_admin with no school_id → pick the first school in the DB
+    if user.role == "super_admin":
+        # Site owner with no school of their own → preview the first school.
         s = db.query(School).order_by(School.id).first()
         if not s:
             raise HTTPException(status_code=404, detail="No schools configured. Seed data first.")
         return s
+    if user.role == "school_admin":
+        # A mis-provisioned school_admin must NOT silently inherit the first
+        # school in the DB — that was a cross-tenant read.
+        if not user.school_id:
+            raise HTTPException(status_code=403, detail="Your account has no school assigned. Contact the site owner.")
+        s = db.query(School).filter(School.id == user.school_id).first()
+        if not s:
+            raise HTTPException(status_code=404, detail="School not found.")
+        return s
     # principal
     if not user.school_id:
-        raise HTTPException(status_code=400, detail="No school assigned to this principal.")
+        raise HTTPException(status_code=403, detail="No school assigned to this principal.")
     s = db.query(School).filter(School.id == user.school_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="School not found.")
@@ -1393,7 +1398,15 @@ def subject_deep_dive(subject_id: int, db: Session = Depends(get_db), user=Depen
         grade_data[g]["classes"] += 1
     students = db.query(Student).filter(Student.class_id.in_([c.id for c in classes])).all()
     stu_by_class = {s.id: s for s in students}
-    marks = db.query(Mark).filter(Mark.subject_id == subject_id).all()
+    # Scope marks to THIS school's students — the previous
+    # `.filter(Mark.subject_id == subject_id)` loaded that subject's marks
+    # for every school in the DB before filtering in Python (slow + mixed
+    # other tenants' rows into per-class buckets via id collisions).
+    student_ids = [s.id for s in students]
+    marks = (db.query(Mark)
+             .filter(Mark.subject_id == subject_id,
+                     Mark.student_id.in_(student_ids) if student_ids else False)
+             .all())
     exams = db.query(Exam).filter(Exam.school_id == school.id).all()
     exam_by_id = {e.id: e for e in exams}
     class_averages = []
@@ -1465,11 +1478,14 @@ def attendance_analytics(db: Session = Depends(get_db), user=Depends(_allowed)):
         if g not in grade_data:
             grade_data[g] = {"grade": g, "total": 0, "present": 0, "absent": 0, "late": 0, "rate": 0, "students": 0}
         grade_data[g]["students"] += 1
+    # O(1) student → grade lookup (the previous `next(...)` scan inside the
+    # record loop made this O(records × students) — ~7M comparisons on the
+    # demo dataset).
+    student_grade = {s.id: grade_map.get(s.class_id) for s in students}
     for r in records:
-        s = next((st for st in students if st.id == r.student_id), None)
-        if not s: continue
-        g = grade_map.get(s.class_id)
-        if g is None: continue
+        g = student_grade.get(r.student_id)
+        if g is None or g not in grade_data:
+            continue
         grade_data[g]["total"] += 1
         if r.status == "P": grade_data[g]["present"] += 1
         elif r.status == "A": grade_data[g]["absent"] += 1

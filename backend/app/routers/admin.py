@@ -24,9 +24,10 @@ from app.schemas.admin import (
 )
 from app.dependencies import (
     get_current_user, require_role, require_super_admin, require_school_admin,
-    assert_school_access,
+    assert_school_access, assert_class_access,
 )
-from app.routers.auth import get_password_hash, _validate_email
+from app.routers.auth import get_password_hash, _validate_email, _validate_password_strength
+from app import config
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -64,8 +65,14 @@ def create_school(data: SchoolCreate, db: Session = Depends(get_db), user=Depend
 
 
 @router.get("/schools")
-def list_schools(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return [{"id": s.id, "name": s.name} for s in db.query(School).order_by(School.id).all()]
+def list_schools(db: Session = Depends(get_db), user=Depends(require_school_admin)):
+    # school_admin only ever sees their own school — the tenant census
+    # (how many schools exist) is owner-only information.
+    if user.role == "school_admin":
+        rows = db.query(School).filter(School.id == user.school_id).order_by(School.id).all() if user.school_id else []
+    else:
+        rows = db.query(School).order_by(School.id).all()
+    return [{"id": s.id, "name": s.name} for s in rows]
 
 
 @router.delete("/schools/{school_id}")
@@ -73,20 +80,32 @@ def delete_school(school_id: int, db: Session = Depends(get_db), user=Depends(re
     s = db.query(School).filter(School.id == school_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="School not found")
-    # cascade clean-up of children
+    # cascade clean-up of children (FK enforcement is on now, so every
+    # referencing row must go or be detached BEFORE the delete)
     class_ids = [c.id for c in db.query(Class).filter(Class.school_id == school_id).all()]
     if class_ids:
         student_ids = [st.id for st in db.query(Student).filter(Student.class_id.in_(class_ids)).all()]
         if student_ids:
+            db.query(TaskCompletion).filter(TaskCompletion.student_id.in_(student_ids)).delete(synchronize_session=False)
             db.query(Attendance).filter(Attendance.student_id.in_(student_ids)).delete(synchronize_session=False)
             db.query(Mark).filter(Mark.student_id.in_(student_ids)).delete(synchronize_session=False)
             db.query(Student).filter(Student.id.in_(student_ids)).delete(synchronize_session=False)
+        db.query(Task).filter(Task.class_id.in_(class_ids)).delete(synchronize_session=False)
+        db.query(TeacherAssignment).filter(TeacherAssignment.class_id.in_(class_ids)).delete(synchronize_session=False)
+        # teachers of these classes keep their accounts, but lose the post
+        db.query(User).filter(User.assigned_class_id.in_(class_ids)).update(
+            {User.assigned_class_id: None}, synchronize_session=False)
         db.query(Class).filter(Class.id.in_(class_ids)).delete(synchronize_session=False)
     db.query(Exam).filter(Exam.school_id == school_id).delete(synchronize_session=False)
     db.query(GradeSubject).filter(GradeSubject.school_id == school_id).delete(synchronize_session=False)
+    db.query(TeacherAssignment).filter(TeacherAssignment.school_id == school_id).delete(synchronize_session=False)
     db.query(UserSchool).filter(UserSchool.school_id == school_id).delete(synchronize_session=False)
+    # Staff accounts of this school survive, but are detached from it.
+    db.query(User).filter(User.school_id == school_id).update(
+        {User.school_id: None}, synchronize_session=False)
     db.delete(s)
     db.commit()
+    _audit(user.email, "school.delete", school_id=school_id, school_name=s.name)
     return {"status": "deleted", "school_id": school_id}
 
 
@@ -108,8 +127,13 @@ def create_class(data: ClassCreate, db: Session = Depends(get_db), user=Depends(
 
 
 @router.get("/classes")
-def list_classes(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    rows = db.query(Class).order_by(Class.school_id, Class.grade, Class.section).all()
+def list_classes(db: Session = Depends(get_db), user=Depends(require_school_admin)):
+    q = db.query(Class).order_by(Class.school_id, Class.grade, Class.section)
+    if user.role == "school_admin":
+        if user.school_id is None:
+            return []
+        q = q.filter(Class.school_id == user.school_id)
+    rows = q.all()
     out = []
     for c in rows:
         teacher = db.query(User).filter(User.id == c.class_teacher_id).first()
@@ -122,7 +146,8 @@ def list_classes(db: Session = Depends(get_db), user=Depends(get_current_user)):
 
 
 @router.get("/classes/school/{school_id}")
-def list_classes_by_school(school_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def list_classes_by_school(school_id: int, db: Session = Depends(get_db), user=Depends(require_school_admin)):
+    assert_school_access(user, school_id)
     rows = db.query(Class).filter(Class.school_id == school_id).order_by(Class.grade, Class.section).all()
     return [{"id": c.id, "grade": c.grade, "section": c.section, "label": f"Grade {c.grade}-{c.section}"}
             for c in rows]
@@ -137,19 +162,36 @@ def create_student(data: StudentCreate, db: Session = Depends(get_db), user=Depe
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
     assert_school_access(user, cls.school_id)
-    student = Student(name=data.name, roll_no=data.roll_no, class_id=data.class_id,
+    # Validate the parent link: only an existing parent ACCOUNT may be
+    # attached, never an arbitrary user id (that would hand another tenant's
+    # user read access to this child).
+    parent = None
+    if data.parent_user_id:
+        parent = db.query(User).filter(User.id == data.parent_user_id).first()
+        if not parent or parent.role != "parent":
+            raise HTTPException(status_code=400, detail="parent_user_id must reference a parent account.")
+        if parent.school_id is not None and parent.school_id != cls.school_id:
+            raise HTTPException(status_code=400, detail="Parent account belongs to a different school.")
+    student = Student(name=data.name.strip(), roll_no=data.roll_no, class_id=data.class_id,
                       parent_user_id=data.parent_user_id)
     db.add(student)
     db.commit()
     db.refresh(student)
+    _audit(user.email, "student.create", student_id=student.id, class_id=data.class_id)
     return {"id": student.id, "name": student.name, "class_id": student.class_id}
 
 
 @router.get("/students/class/{class_id}")
 def list_students_in_class(class_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    cls = db.query(Class).filter(Class.id == class_id).first()
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    # Any authenticated user could previously enumerate ANY class's roster
+    # (names, roll numbers AND the parent account ids). Scope it now.
+    assert_class_access(user, cls)
     rows = db.query(Student).filter(Student.class_id == class_id).order_by(Student.roll_no).all()
-    return [{"id": s.id, "name": s.name, "roll_no": s.roll_no,
-             "parent_user_id": s.parent_user_id} for s in rows]
+    # parent_user_id is deliberately NOT exposed here (internal linkage).
+    return [{"id": s.id, "name": s.name, "roll_no": s.roll_no} for s in rows]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -201,6 +243,8 @@ def remove_grade_subject(school_id: int, grade: int, subject_id: int,
 @router.get("/grade-subjects/{school_id}/{grade}")
 def list_grade_subjects(school_id: int, grade: int, db: Session = Depends(get_db),
                         user=Depends(get_current_user)):
+    if user.role in ("school_admin", "principal") and user.school_id != school_id:
+        raise HTTPException(status_code=403, detail="You can only view your own school's configuration.")
     rows = db.query(GradeSubject).filter(
         GradeSubject.school_id == school_id, GradeSubject.grade == grade
     ).all()
@@ -252,6 +296,8 @@ def create_exam(data: ExamCreate, db: Session = Depends(get_db), user=Depends(re
 @router.get("/exams")
 def list_exams(school_id: int, grade: int, db: Session = Depends(get_db),
                user=Depends(get_current_user)):
+    if user.role in ("school_admin", "principal") and user.school_id != school_id:
+        raise HTTPException(status_code=403, detail="You can only view your own school's exams.")
     rows = db.query(Exam).filter(Exam.school_id == school_id, Exam.grade == grade).order_by(Exam.id).all()
     return [{"id": e.id, "name": e.name, "max_score": e.max_score, "term": e.term,
              "grade": e.grade, "school_id": e.school_id} for e in rows]
@@ -284,6 +330,29 @@ def create_account(data: AccountCreate, db: Session = Depends(get_db), user=Depe
     valid_roles = {"class_teacher", "principal", "chairperson", "parent", "school_admin"}
     if data.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Role must be one of {valid_roles}")
+    # Same policy as self-registration — account creation must not be a
+    # side-door for weak credentials.
+    _validate_password_strength(data.password)
+    if data.full_name:
+        data.full_name = data.full_name.strip()[:120]
+
+    # Validate referenced ids so we never create orphaned/half-linked
+    # accounts (SQLite used to silently accept dangling references).
+    if data.role in ("principal", "school_admin"):
+        if not data.school_id:
+            raise HTTPException(status_code=400, detail=f"{data.role} accounts require a school_id.")
+        if not db.query(School).filter(School.id == data.school_id).first():
+            raise HTTPException(status_code=404, detail="School not found")
+    if data.role == "class_teacher":
+        if not data.assigned_class_id:
+            raise HTTPException(status_code=400, detail="class_teacher accounts require an assigned_class_id.")
+        if not db.query(Class).filter(Class.id == data.assigned_class_id).first():
+            raise HTTPException(status_code=404, detail="Assigned class not found")
+    if data.role == "chairperson" and data.school_ids:
+        found = {s.id for s in db.query(School).filter(School.id.in_(data.school_ids)).all()}
+        missing = set(data.school_ids) - found
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Schools not found: {sorted(missing)}")
 
     new_user = User(
         email=data.email,
@@ -302,11 +371,14 @@ def create_account(data: AccountCreate, db: Session = Depends(get_db), user=Depe
             db.add(UserSchool(user_id=new_user.id, school_id=sid))
         db.commit()
 
-    if data.role == "parent" and data.student_id:
+    if data.role == "parent":
+        if not data.student_id:
+            raise HTTPException(status_code=400, detail="parent accounts require a student_id to link.")
         student = db.query(Student).filter(Student.id == data.student_id).first()
-        if student:
-            student.parent_user_id = new_user.id
-            db.commit()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student to link not found")
+        student.parent_user_id = new_user.id
+        db.commit()
 
     _audit(
         user.email, "account.create",
@@ -321,9 +393,10 @@ def create_account(data: AccountCreate, db: Session = Depends(get_db), user=Depe
 @router.get("/accounts")
 def list_accounts(db: Session = Depends(get_db), user=Depends(require_school_admin)):
     q = db.query(User).order_by(User.id)
-    # school_admin only sees their own school's accounts
+    # school_admin only sees their own school's accounts — never super_admins
+    # (that list would be a target map for credential attacks).
     if user.role == "school_admin":
-        q = q.filter(User.school_id == user.school_id)
+        q = q.filter(User.school_id == user.school_id, User.role != "super_admin")
     rows = q.all()
     out = []
     for u in rows:
@@ -343,9 +416,18 @@ def delete_account(user_id: int, db: Session = Depends(get_db), current=Depends(
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="Account not found")
+    if u.role == "super_admin":
+        raise HTTPException(status_code=400, detail="Super admin accounts cannot be deleted from the UI.")
     target_email = u.email
     target_role = u.role
+    # Detach links BEFORE deleting (FK enforcement is on).
     db.query(UserSchool).filter(UserSchool.user_id == user_id).delete()
+    db.query(Student).filter(Student.parent_user_id == user_id).update(
+        {Student.parent_user_id: None}, synchronize_session=False)
+    db.query(Class).filter(Class.class_teacher_id == user_id).update(
+        {Class.class_teacher_id: None}, synchronize_session=False)
+    db.query(User).filter(User.id == user_id).update(
+        {User.assigned_class_id: None}, synchronize_session=False)
     db.delete(u)
     db.commit()
     _audit(
@@ -366,9 +448,23 @@ def assign_class_teacher(body: AssignBody, class_id: int, db: Session = Depends(
     if not u or not cls:
         raise HTTPException(status_code=404, detail="User or class not found")
     assert_school_access(user, cls.school_id)
+    # Only a class_teacher account may hold the post, and they must belong
+    # to the class's school (a school_admin can no longer re-point ANY
+    # user in the system at one of their classes).
+    if u.role != "class_teacher":
+        raise HTTPException(status_code=400, detail="Only class_teacher accounts can be assigned to a class.")
+    if u.school_id is not None and u.school_id != cls.school_id:
+        raise HTTPException(status_code=400, detail="Teacher belongs to a different school.")
+    # Detach the teacher from any previous class post first.
+    if u.assigned_class_id and u.assigned_class_id != cls.id:
+        db.query(Class).filter(Class.class_teacher_id == u.id).update(
+            {Class.class_teacher_id: None}, synchronize_session=False)
     cls.class_teacher_id = u.id
     u.assigned_class_id = cls.id
+    if u.school_id is None:
+        u.school_id = cls.school_id
     db.commit()
+    _audit(user.email, "role.assign_class_teacher", teacher_user_id=u.id, class_id=cls.id)
     return {"status": "assigned", "user_id": u.id, "class_id": cls.id}
 
 
@@ -378,6 +474,11 @@ def assign_principal(body: AssignBody, school_id: int, db: Session = Depends(get
     u = db.query(User).filter(User.id == body.user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    if u.role != "principal":
+        raise HTTPException(status_code=400, detail="Only principal accounts can be assigned to a school.")
     u.school_id = school_id
     db.commit()
     _audit(
@@ -411,6 +512,10 @@ def assign_chairperson(body: AssignBody, db: Session = Depends(get_db),
 # ──────────────────────────────────────────────────────────────
 @router.post("/seed")
 def seed_data(db: Session = Depends(get_db), user=Depends(require_school_admin)):
+    # Demo seeding wipes/overwrites real-looking data and ships well-known
+    # demo passwords — never allow it in a production deployment.
+    if config.IS_PRODUCTION:
+        raise HTTPException(status_code=403, detail="Demo seeding is disabled in production.")
     if user.role == "school_admin":
         school = db.query(School).filter(School.id == user.school_id).first() if user.school_id else None
         if not school:
@@ -585,6 +690,10 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
         class ci's CT post goes to teacher slot (ci % 5) of subject (ci % 6)
       - 1 parent account linked to the first student of the first class
     """
+    # DESTRUCTIVE: wipes the entire database and creates accounts with
+    # well-known demo passwords. Blocked outright in production.
+    if config.IS_PRODUCTION:
+        raise HTTPException(status_code=403, detail="Demo seeding is disabled in production.")
     _audit(user.email, "seed_full.start", note="wiping all data + reseeding")
     _wipe_all(db, keep_user_id=user.id)
 

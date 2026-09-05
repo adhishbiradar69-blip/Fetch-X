@@ -204,16 +204,27 @@ def _ensure_user(db, email: str, password: str, full_name: str, role: str,
 
 
 def _ensure_root_admin(db) -> None:
-    """Guarantee the hardcoded root super admin exists (never resets password)."""
+    """Guarantee a root super admin exists (never resets password).
+
+    The password is no longer hardcoded: if the account is missing it is
+    created with a random password printed once to stdout. Operators should
+    prefer the app's own startup provisioning (SCHOOLAI_ROOT_PASSWORD env).
+    """
+    import secrets as _secrets
     root = db.query(User).filter(User.email == "root.schoolai@nexus-secure.internal").first()
     if root is None:
+        _pw = os.environ.get("SCHOOLAI_ROOT_PASSWORD") or "".join(
+            _secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*")
+            for _ in range(20))
         db.add(User(
             email="root.schoolai@nexus-secure.internal",
-            hashed_password=get_password_hash("Tr!umphant-Str@tik-9173"),
+            hashed_password=get_password_hash(_pw),
             full_name="System Root", role="super_admin",
             school_id=None, assigned_class_id=None,
         ))
         db.commit()
+        if not os.environ.get("SCHOOLAI_ROOT_PASSWORD"):
+            print(f"[setup] seed_demo created root admin — password (once): {_pw}")
         print("[accounts] root super admin created")
 
 

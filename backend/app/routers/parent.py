@@ -24,7 +24,11 @@ def _child_of(user: User, db: Session):
         if not s:
             raise HTTPException(status_code=404, detail="No students in the system yet.")
         return s
-    student = db.query(Student).filter(Student.parent_user_id == user.id).first()
+    # Real parents: deterministic pick (lowest id) of their linked children.
+    student = (db.query(Student)
+               .filter(Student.parent_user_id == user.id)
+               .order_by(Student.id)
+               .first())
     if not student:
         raise HTTPException(status_code=404, detail="No child is linked to your account.")
     return student
@@ -35,7 +39,6 @@ def my_child(db: Session = Depends(get_db), user=Depends(_allowed)):
     student = _child_of(user, db)
     cls = db.query(Class).filter(Class.id == student.class_id).first()
     marks = db.query(Mark).filter(Mark.student_id == student.id).all()
-    exams = db.query(Exam).filter(Exam.school_id == cls.school_id if cls else 0).all()
     attendance = db.query(Attendance).filter(Attendance.student_id == student.id).all()
 
     marks_out = []

@@ -1,10 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth, homePathFor } from './auth/AuthContext';
 import Layout from './components/Layout';
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import PublicLayout from './components/PublicLayout';
-import { RouteLoader, useRouteTransition } from './components/PageLoader.jsx';
 import Login from './pages/Login';
 import Landing from './pages/public/Landing';
 import About from './pages/public/About';
@@ -39,7 +37,10 @@ function ProtectedRoute({ children, roles }) {
   const { user, token } = useAuth();
   const location = useLocation();
   if (!token) return <Navigate to="/login" replace state={{ from: location }} />;
-  if (roles && user && !roles.includes(user.role)) {
+  // Token present but user object missing/corrupted → re-auth cleanly
+  // instead of rendering pages with the wrong role chrome.
+  if (!user) return <Navigate to="/login" replace />;
+  if (roles && !roles.includes(user.role)) {
     return <Navigate to={homePathFor(user.role)} replace />;
   }
   return <Layout>{children}</Layout>;
@@ -72,61 +73,58 @@ function LoginRoute() {
 
 function AnimatedRoutes() {
   const location = useLocation();
-  // 600ms route-loader on every navigation. Doesn't block public pages — the
-  // loader is purely visual (overlay) and the new route renders underneath.
-  const loading = useRouteTransition(location.pathname, 600);
-
+  // PERF/UX fix: the old code gated EVERY navigation behind an artificial
+  // 600ms full-screen loader AND remounted the whole app shell (sidebar
+  // included) per route via <AnimatePresence mode="wait"> around <Routes>.
+  // Real per-page skeletons already handle loading feedback, and Layout's
+  // own page-host transition is the genuine route fade — so navigation is
+  // now instant with the same visual polish.
   return (
-    <>
-      <AnimatePresence>{loading && <RouteLoader key="route-loader" ms={600} onDone={() => {}} />}</AnimatePresence>
-      <AnimatePresence mode="wait">
-        <Routes location={location} key={location.pathname}>
-          {/* Public pages — no auth required */}
-          <Route path="/" element={<LandingRoute />} />
-          <Route path="/about" element={<PublicPage><About /></PublicPage>} />
-          <Route path="/terms" element={<PublicPage><Terms /></PublicPage>} />
-          <Route path="/privacy" element={<PublicPage><Privacy /></PublicPage>} />
-          <Route path="/login" element={<LoginRoute />} />
+    <Routes location={location}>
+      {/* Public pages — no auth required */}
+      <Route path="/" element={<LandingRoute />} />
+      <Route path="/about" element={<PublicPage><About /></PublicPage>} />
+      <Route path="/terms" element={<PublicPage><Terms /></PublicPage>} />
+      <Route path="/privacy" element={<PublicPage><Privacy /></PublicPage>} />
+      <Route path="/login" element={<LoginRoute />} />
 
-          {/* Protected app pages — auth + role required */}
-          <Route path="/teacher/attendance" element={
-            <ProtectedRoute roles={['class_teacher', ...A]}><AttendanceBoard /></ProtectedRoute>} />
-          <Route path="/teacher/tasks" element={
-            <ProtectedRoute roles={['class_teacher', ...A]}><TaskManager /></ProtectedRoute>} />
-          <Route path="/teacher/marks" element={
-            <ProtectedRoute roles={['class_teacher', ...A]}><MarksBoard /></ProtectedRoute>} />
-          <Route path="/class-teacher/report" element={
-            <ProtectedRoute roles={['class_teacher', ...A]}><ClassReport /></ProtectedRoute>} />
-          <Route path="/admin/dashboard" element={
-            <ProtectedRoute roles={A}><AdminDashboard /></ProtectedRoute>} />
-          <Route path="/admin/students" element={
-            <ProtectedRoute roles={A}><AdminStudents /></ProtectedRoute>} />
-          <Route path="/admin/accounts" element={
-            <ProtectedRoute roles={A}><AccountCreation /></ProtectedRoute>} />
-          <Route path="/principal/dashboard" element={
-            <ProtectedRoute roles={['principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
-          {/* v5 consolidation: the designer's principal section is ONE page —
-              every former sub-page lives inside the dashboard (sections +
-              modals). Old URLs land on the dashboard. */}
-          <Route path="/principal/students" element={<Navigate to="/principal/dashboard" replace />} />
-          <Route path="/principal/grades" element={<Navigate to="/principal/dashboard" replace />} />
-          <Route path="/principal/subjects" element={<Navigate to="/principal/dashboard" replace />} />
-          <Route path="/principal/at-risk" element={<Navigate to="/principal/dashboard" replace />} />
-          <Route path="/principal/attendance" element={<Navigate to="/principal/dashboard" replace />} />
-          <Route path="/principal/compare" element={<Navigate to="/principal/dashboard" replace />} />
-          <Route path="/chairperson/dashboard" element={
-            <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonMultiSchool /></ProtectedRoute>} />
-          <Route path="/chairperson/rankings" element={
-            <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonRankings /></ProtectedRoute>} />
-          <Route path="/chairperson/compare" element={
-            <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonCompare /></ProtectedRoute>} />
-          <Route path="/parent/view" element={
-            <ProtectedRoute roles={['parent', ...A]}><ParentChildView /></ProtectedRoute>} />
+      {/* Protected app pages — auth + role required */}
+      <Route path="/teacher/attendance" element={
+        <ProtectedRoute roles={['class_teacher', ...A]}><AttendanceBoard /></ProtectedRoute>} />
+      <Route path="/teacher/tasks" element={
+        <ProtectedRoute roles={['class_teacher', ...A]}><TaskManager /></ProtectedRoute>} />
+      <Route path="/teacher/marks" element={
+        <ProtectedRoute roles={['class_teacher', ...A]}><MarksBoard /></ProtectedRoute>} />
+      <Route path="/class-teacher/report" element={
+        <ProtectedRoute roles={['class_teacher', ...A]}><ClassReport /></ProtectedRoute>} />
+      <Route path="/admin/dashboard" element={
+        <ProtectedRoute roles={A}><AdminDashboard /></ProtectedRoute>} />
+      <Route path="/admin/students" element={
+        <ProtectedRoute roles={A}><AdminStudents /></ProtectedRoute>} />
+      <Route path="/admin/accounts" element={
+        <ProtectedRoute roles={A}><AccountCreation /></ProtectedRoute>} />
+      <Route path="/principal/dashboard" element={
+        <ProtectedRoute roles={['principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
+      {/* v5 consolidation: the designer's principal section is ONE page —
+          every former sub-page lives inside the dashboard (sections +
+          modals). Old URLs land on the dashboard. */}
+      <Route path="/principal/students" element={<Navigate to="/principal/dashboard" replace />} />
+      <Route path="/principal/grades" element={<Navigate to="/principal/dashboard" replace />} />
+      <Route path="/principal/subjects" element={<Navigate to="/principal/dashboard" replace />} />
+      <Route path="/principal/at-risk" element={<Navigate to="/principal/dashboard" replace />} />
+      <Route path="/principal/attendance" element={<Navigate to="/principal/dashboard" replace />} />
+      <Route path="/principal/compare" element={<Navigate to="/principal/dashboard" replace />} />
+      <Route path="/chairperson/dashboard" element={
+        <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonMultiSchool /></ProtectedRoute>} />
+      <Route path="/chairperson/rankings" element={
+        <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonRankings /></ProtectedRoute>} />
+      <Route path="/chairperson/compare" element={
+        <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonCompare /></ProtectedRoute>} />
+      <Route path="/parent/view" element={
+        <ProtectedRoute roles={['parent', ...A]}><ParentChildView /></ProtectedRoute>} />
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AnimatePresence>
-    </>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 

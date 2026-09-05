@@ -27,12 +27,15 @@ export default function Login() {
     if (!agreed) { setError('You must agree to the Terms and Conditions to continue.'); return; }
     setLoading(true);
     try {
-      const user = await login(email, password);
+      const user = await login(email.trim(), password);
       navigate(homePathFor(user.role), { replace: true });
     } catch (err) {
       if (!err.response) {
         // Network error — backend unreachable
         setError('Cannot reach the server. If this is a deployed site, the backend needs to be deployed separately. See the README for instructions.');
+      } else if (err.response?.status === 423) {
+        // Account lockout — the backend returns its own explanatory detail.
+        setError(err.response?.data?.detail || 'Too many failed attempts. Please try again in 15 minutes.');
       } else {
         setError('Invalid email or password');
       }
@@ -47,19 +50,18 @@ export default function Login() {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.6, ease: EASE }}>
         <div className="login-card">
-          {/* Logo mark with glow pulse */}
+          {/* Logo mark with a static glow halo (the 3s infinite pulse was
+              decorative — removed; a calm halo reads the same at rest). */}
           <motion.div className="login-logo"
             initial={{ scale: 0.6, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ ...SPRING, delay: 0.1 }}>
-            <motion.span className="login-logo-glow"
-              animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.15, 1] }}
-              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }} />
+            <span className="login-logo-glow" />
             <Logo size={54} />
           </motion.div>
 
-          <motion.h1 className="login-title" {...field(0.18)}>Fetch-X Portal</motion.h1>
-          <motion.p className="login-sub" {...field(0.24)}>Authorized personnel only</motion.p>
+          <motion.h1 className="login-title" {...field(0.08)}>Fetch-X Portal</motion.h1>
+          <motion.p className="login-sub" {...field(0.12)}>Authorized personnel only</motion.p>
 
           {error && (
             <motion.div className="login-error"
@@ -72,18 +74,20 @@ export default function Login() {
           )}
 
           <form onSubmit={handleSubmit}>
-            <motion.div className="login-field field" {...field(0.32)}>
+            {/* Stagger capped at ≤0.2s total — the submit button used to be
+                invisible until ~1s after mount (A15). */}
+            <motion.div className="login-field field" {...field(0.14)}>
               <label htmlFor="login-email">Email</label>
               <input id="login-email" type="email" placeholder="you@school.edu" value={email}
                 onChange={(e) => setEmail(e.target.value)} className="input" autoComplete="username" required />
             </motion.div>
-            <motion.div className="login-field field" {...field(0.40)}>
+            <motion.div className="login-field field" {...field(0.17)}>
               <label htmlFor="login-password">Password</label>
               <input id="login-password" type="password" placeholder="••••••••" value={password}
                 onChange={(e) => setPassword(e.target.value)} className="input" autoComplete="current-password" required />
             </motion.div>
 
-            <motion.div className="login-terms" {...field(0.48)}>
+            <motion.div className="login-terms" {...field(0.20)}>
               <input type="checkbox" id="terms" checked={agreed}
                 onChange={(e) => setAgreed(e.target.checked)} />
               <label htmlFor="terms">
@@ -93,7 +97,7 @@ export default function Login() {
             </motion.div>
 
             <motion.button type="submit" className="btn btn-primary login-submit"
-              disabled={loading} {...field(0.56)}
+              disabled={loading} {...field(0.23)}
               whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }}>
               {loading ? (
                 <>
@@ -109,7 +113,7 @@ export default function Login() {
           </form>
         </div>
 
-        <motion.p className="login-footer" {...field(0.7)}>
+        <motion.p className="login-footer" {...field(0.3)}>
           <Link to="/" className="login-footer-back"><ArrowLeft size={13} /> Back to site</Link>
           <span>Fetch-X Data Intelligence Platform · v1.1</span>
         </motion.p>

@@ -40,15 +40,4 @@ export const staggerItem = {
 };
 
 /* A single rising item (no container needed). */
-export const riseItem = {
-  initial: { opacity: 0, y: 16 },
-  animate: { opacity: 1, y: 0 },
-};
-
 export const rise = { duration: 0.5, ease: EASE };
-
-/* Stat card hover. */
-export const statHover = {
-  whileHover: { y: -6, transition: SPRING },
-  whileTap: { scale: 0.98 },
-};

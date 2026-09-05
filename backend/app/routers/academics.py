@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from app.database import get_db
 from app.models.mark import Mark
 from app.models.student import Student
@@ -9,11 +8,12 @@ from app.models.subject import Subject
 from app.models.grade_subject import GradeSubject
 from app.models.exam import Exam
 from app.schemas.admin import BulkMarksCreate
-from app.dependencies import get_current_user, require_role
+from app.dependencies import (
+    get_current_user, require_role, assert_class_access, assert_student_access,
+)
 
 router = APIRouter(prefix="/academics", tags=["academics"])
-_allowed = require_role("class_teacher", "super_admin", "school_admin",
-                        "principal", "chairperson", "parent")
+_write = require_role("class_teacher", "super_admin", "school_admin")
 
 
 # ── Subjects (global list) ───────────────────────────────────
@@ -27,6 +27,18 @@ def list_subjects(db: Session = Depends(get_db), user=Depends(get_current_user))
 @router.get("/grade/{school_id}/{grade}/subjects")
 def grade_subjects(school_id: int, grade: int, db: Session = Depends(get_db),
                    user=Depends(get_current_user)):
+    # School-scope: staff only see their own school's subject configuration
+    # (super_admin / chairperson may see any).
+    if user.role == "school_admin" and user.school_id != school_id:
+        raise HTTPException(status_code=403, detail="You can only view your own school's subjects.")
+    if user.role == "principal" and user.school_id != school_id:
+        raise HTTPException(status_code=403, detail="You can only view your own school's subjects.")
+    if user.role == "class_teacher":
+        my = db.query(Class).filter(Class.id == user.assigned_class_id).first() if user.assigned_class_id else None
+        if not my or my.school_id != school_id:
+            raise HTTPException(status_code=403, detail="You can only view your own school's subjects.")
+    if user.role == "parent":
+        raise HTTPException(status_code=403, detail="You do not have permission to access this resource.")
     rows = db.query(GradeSubject).filter(
         GradeSubject.school_id == school_id, GradeSubject.grade == grade
     ).all()
@@ -44,6 +56,7 @@ def class_exams(class_id: int, db: Session = Depends(get_db), user=Depends(get_c
     cls = db.query(Class).filter(Class.id == class_id).first()
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
+    assert_class_access(user, cls)
     rows = db.query(Exam).filter(
         Exam.school_id == cls.school_id, Exam.grade == cls.grade
     ).order_by(Exam.id).all()
@@ -58,9 +71,12 @@ def class_marks(class_id: int, exam_id: int, db: Session = Depends(get_db),
     cls = db.query(Class).filter(Class.id == class_id).first()
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
+    assert_class_access(user, cls)
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    if exam.school_id != cls.school_id:
+        raise HTTPException(status_code=400, detail="Exam does not belong to this class's school.")
 
     # subjects for this grade
     gs_rows = db.query(GradeSubject).filter(
@@ -92,18 +108,40 @@ def class_marks(class_id: int, exam_id: int, db: Session = Depends(get_db),
 
 # ── Bulk save marks (class teacher enters scores) ────────────
 @router.post("/marks/bulk")
-def save_bulk_marks(data: BulkMarksCreate, db: Session = Depends(get_db), user=Depends(_allowed)):
+def save_bulk_marks(data: BulkMarksCreate, db: Session = Depends(get_db), user=Depends(_write)):
     cls = db.query(Class).filter(Class.id == data.class_id).first()
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
+    # IDOR guard: only the class's teacher / school admins may write marks.
+    assert_class_access(user, cls, write=True)
     exam = db.query(Exam).filter(Exam.id == data.exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    if exam.school_id != cls.school_id:
+        raise HTTPException(status_code=400, detail="Exam does not belong to this class's school.")
 
+    # Valid students & subjects for this class — anything else is rejected
+    # so marks can't be forged for other classes/schools via raw ids.
+    valid_student_ids = {s.id for s in
+                         db.query(Student).filter(Student.class_id == data.class_id).all()}
+    valid_subject_ids = {gs.subject_id for gs in db.query(GradeSubject).filter(
+        GradeSubject.school_id == cls.school_id, GradeSubject.grade == cls.grade).all()}
+    if not valid_subject_ids:
+        raise HTTPException(status_code=400, detail="No subjects configured for this class's grade.")
+
+    seen_pairs = set()
     for item in data.marks:
         if item.score < 0 or item.score > exam.max_score:
             raise HTTPException(status_code=400,
                                 detail=f"Score {item.score} out of range for exam max {exam.max_score}")
+        if item.student_id not in valid_student_ids:
+            raise HTTPException(status_code=400, detail="Student does not belong to this class.")
+        if item.subject_id not in valid_subject_ids:
+            raise HTTPException(status_code=400, detail="Subject is not configured for this class's grade.")
+        pair = (item.student_id, item.subject_id)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
         existing = db.query(Mark).filter(
             Mark.student_id == item.student_id,
             Mark.subject_id == item.subject_id,
@@ -115,7 +153,7 @@ def save_bulk_marks(data: BulkMarksCreate, db: Session = Depends(get_db), user=D
             db.add(Mark(student_id=item.student_id, subject_id=item.subject_id,
                         exam_id=data.exam_id, score=item.score))
     db.commit()
-    return {"status": "saved", "count": len(data.marks)}
+    return {"status": "saved", "count": len(seen_pairs)}
 
 
 # ── Single student marks (parent view + class report) ───────
@@ -124,6 +162,8 @@ def student_marks(student_id: int, db: Session = Depends(get_db), user=Depends(g
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+    # IDOR guard: parent → own child, staff → own scope.
+    assert_student_access(user, student, db)
     marks = db.query(Mark).filter(Mark.student_id == student_id).all()
     out = []
     for m in marks:
@@ -147,6 +187,7 @@ def class_report(class_id: int, db: Session = Depends(get_db), user=Depends(get_
     cls = db.query(Class).filter(Class.id == class_id).first()
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
+    assert_class_access(user, cls)
     students = db.query(Student).filter(Student.class_id == class_id).all()
 
     # figure out max_score baseline (use the first exam's max, or 100)

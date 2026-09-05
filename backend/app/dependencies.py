@@ -7,7 +7,19 @@ from app.database import get_db
 from app.models.user import User
 from app import config
 
-security = HTTPBearer()
+# auto_error=False so a MISSING Authorization header can be reported as a
+# proper 401 (with WWW-Authenticate) instead of FastAPI's default 403.
+# RFC 7235: missing/invalid credentials => 401 Unauthorized; 403 is reserved
+# for "authenticated but not allowed". Frontend treats 401/403 identically,
+# so this only makes the API standards-correct for other clients.
+security = HTTPBearer(auto_error=False)
+
+def _credentials_exception():
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 # All admin-style roles. `super_admin` is the website owner (can manage
 # schools + accounts), `school_admin` is a school-scoped admin.
@@ -23,6 +35,8 @@ ALLOWED_ROLES = frozenset({
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    if credentials is None:
+        raise _credentials_exception()
     token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -124,3 +138,90 @@ def assert_school_access(user: User, school_id: int):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only manage your own school.",
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Object-level (IDOR) guards — every class/student-scoped route must call one
+# of these so a user can never read or write another tenant's data by guessing
+# ids. Read roles (principal / chairperson / parent) are handled explicitly so
+# the checks stay obvious and auditable.
+# ─────────────────────────────────────────────────────────────────────────────
+WRITE_CLASS_ROLES = ("class_teacher", "school_admin", "super_admin")
+
+
+def assert_class_access(user: User, cls, write: bool = False):
+    """Raise 403 unless `user` may access the ORM `Class` object.
+
+    write=True restricts to roles allowed to mutate class data (attendance,
+    marks, tasks). Read access additionally covers principal (own school).
+    """
+    role = user.role
+    if role == "super_admin":
+        return
+    if role == "chairperson":
+        if write:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chairpersons have read-only access.",
+            )
+        return
+    if role in ("school_admin", "principal"):
+        if user.school_id is None or cls is None or cls.school_id != user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only access classes in your own school.",
+            )
+        return
+    if role == "class_teacher":
+        if cls is None or not (cls.class_teacher_id == user.id or user.assigned_class_id == cls.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only access your assigned class.",
+            )
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to access this resource.",
+    )
+
+
+def assert_student_access(user: User, student, db: Session):
+    """Raise 403 unless `user` may read this student's records.
+
+    school_admin / principal → student's class must be in their school;
+    class_teacher → student must be in their assigned class;
+    parent → student.parent_user_id must point at them.
+    """
+    from app.models.class_ import Class  # local import avoids a circular dep
+
+    role = user.role
+    if role == "super_admin":
+        return
+    if role == "chairperson":
+        return
+    cls = db.query(Class).filter(Class.id == student.class_id).first() if student else None
+    if role in ("school_admin", "principal"):
+        if user.school_id is None or cls is None or cls.school_id != user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only access students in your own school.",
+            )
+        return
+    if role == "class_teacher":
+        if cls is None or user.assigned_class_id != cls.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only access students in your assigned class.",
+            )
+        return
+    if role == "parent":
+        if student is None or student.parent_user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view your own child.",
+            )
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to access this resource.",
+    )

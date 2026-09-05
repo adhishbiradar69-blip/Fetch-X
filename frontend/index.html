@@ -9,20 +9,40 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:wght@600;700&display=swap" rel="stylesheet" />
     <script>
-      /* Apply persisted light/dark mode before first paint (no flash). */
+      /* Apply persisted colour mode before first paint (no flash).
+         Honours 'system' (the default) via prefers-color-scheme, so OS-dark
+         users no longer get a white flash before React mounts. */
       (function () {
-        try {
-          var m = localStorage.getItem('fx-mode');
-          if (m === 'dark') document.documentElement.setAttribute('data-mode', 'dark');
-        } catch (e) {}
+        function resolvedMode() {
+          try {
+            var raw = localStorage.getItem('fx-prefs');
+            if (raw) {
+              var p = JSON.parse(raw);
+              if (p && p.mode === 'dark') return 'dark';
+              if (p && p.mode === 'light') return 'light';
+            }
+            var m = localStorage.getItem('fx-mode');
+            if (m === 'dark') return 'dark';
+            if (m === 'light') return 'light';
+          } catch (e) {}
+          try {
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+          } catch (e) {}
+          return 'light';
+        }
+        var mode = resolvedMode();
+        document.documentElement.setAttribute('data-mode', mode);
+        (function applyOnBody() {
+          if (document.body) {
+            if (mode === 'dark') document.body.classList.add('dark');
+          } else {
+            document.addEventListener('DOMContentLoaded', applyOnBody);
+          }
+        })();
       })();
     </script>
   </head>
   <body>
-    <script>
-      /* Same check on <body> (runs before the deferred module script mounts React). */
-      try { if (localStorage.getItem('fx-mode') === 'dark') document.body.classList.add('dark'); } catch (e) {}
-    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

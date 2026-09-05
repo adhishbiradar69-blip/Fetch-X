@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.database import engine, Base, SessionLocal
+from app.database import engine, Base, SessionLocal, ensure_unique_indexes
 from app.models import user, user_school, school, class_, student, attendance, task, mark, subject, grade_subject, exam, teacher_assignment
 from app.routers import auth, admin, attendance, tasks, academics, principal, chairperson, parent
 from app.rate_limit import limiter
@@ -81,9 +81,16 @@ async def add_security_headers(request: Request, call_next):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Startup: create tables + ensure root super_admin exists
+# Startup: create tables + data-integrity migration + ensure root super_admin
 # ─────────────────────────────────────────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
+
+# Collapse any pre-existing duplicate attendance/mark rows, then add the
+# UNIQUE indexes that make duplicate writes impossible going forward.
+try:
+    ensure_unique_indexes()
+except Exception as exc:  # pragma: no cover — startup should not crash on this
+    print(f"[warn] ensure_unique_indexes failed: {exc}")
 
 # Provision the hardcoded super_admin if missing.
 try:

@@ -23,7 +23,10 @@ const STATUS = {
 };
 
 function StatusPill({ status, onClick, active }) {
-  const s = STATUS[status] || STATUS.P;
+  // null/undefined = NOT MARKED — its own visible state (first tap marks
+  // Present). The old board silently coerced this to 'P' and then saved the
+  // whole roster as Present on an untouched Save press (M17).
+  const s = STATUS[status] || { cls: 'pill-attendance pill-unmarked', label: 'Not Marked', Icon: Clock, color: 'var(--muted)' };
   const StatusIcon = s.Icon;
   return (
     <motion.button
@@ -73,6 +76,8 @@ export default function AttendanceBoard() {
   const [mode, setMode] = useState(() => (sessionStorage.getItem('att-mode') === 'weekly' ? 'weekly' : 'daily'));
   const switchMode = (m) => { setMode(m); try { sessionStorage.setItem('att-mode', m); } catch { /* private mode */ } };
   const [students, setStudents] = useState([]);
+  // daily board: ids touched since the last load/save — Save posts ONLY these
+  const [dirtyDaily, setDirtyDaily] = useState({});
   const [date, setDate] = useState(() => {
     const t = new Date();
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
@@ -82,7 +87,13 @@ export default function AttendanceBoard() {
   const [toast, setToast] = useState(null);
   const [changingId, setChangingId] = useState(null);
   const [dateChanging, setDateChanging] = useState(false);
-  const showToast = (m, t = 'success') => { setToast({ message: m, type: t }); setTimeout(() => setToast(null), 2600); };
+  const toastTimer = useRef(null);
+  const showToast = useCallback((m, t = 'success') => {
+    setToast({ message: m, type: t });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2600);
+  }, []);  // single auto-dismiss owner — cleaned up on unmount
+  useEffect(() => () => toastTimer.current && clearTimeout(toastTimer.current), []);
 
   /* ── weekly board state ── */
   const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -111,7 +122,7 @@ export default function AttendanceBoard() {
         setWeekGrid((r.data.students || []).map(s => ({ ...s, days: [...(s.days || [])] })));
         setDirty({});
         setWeekLoaded(true);
-      }).catch(e => console.error(e)).finally(() => { if (!stale) setWeekLoading(false); });
+      }).catch(e => { console.error(e); showToast('Failed to load the week', 'error'); }).finally(() => { if (!stale) setWeekLoading(false); });
     }, 0);
     return () => { stale = true; clearTimeout(timer); };
   }, [classId, mode, weekStart]);
@@ -183,7 +194,7 @@ export default function AttendanceBoard() {
       }));
       setWeekGrid(nextGrid);
       setDirty(nextDirty);
-      showToast(n ? `Copied ${n} status${n === 1 ? '' : 'es'} from last week — review and save` : 'Last week has nothing to copy yet', n ? 'success' : 'error');
+      showToast(n ? `Copied ${n} status${n === 1 ? '' : 'es'} from last week — review and save` : 'Last week has nothing to copy yet', n ? 'success' : 'info');
     } catch { showToast('Failed to copy last week', 'error'); }
     setCopyingLast(false);
   };
@@ -199,7 +210,7 @@ export default function AttendanceBoard() {
       });
       return { ...row, days, week_rate: null };
     });
-    if (!n) { showToast('Nothing marked to clear this week', 'error'); return; }
+    if (!n) { showToast('Nothing marked to clear this week', 'info'); return; }
     const nextDirty = { ...dirty };
     nextGrid.forEach(row => row.days.forEach((v, i) => {
       const before = weekGrid.find(g => g.id === row.id)?.days[i];
@@ -212,8 +223,10 @@ export default function AttendanceBoard() {
 
   const weekLabel = (() => {
     if (!weekDays.length) return '';
-    const a = new Date(`${weekDays[0]}T00:00:00`), b = new Date(`${weekDays[4]}T00:00:00`);
+    // derive from the actual array — never assume exactly 5 days (M23)
+    const a = new Date(`${weekDays[0]}T00:00:00`), b = new Date(`${weekDays[weekDays.length - 1]}T00:00:00`);
     const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    if (isNaN(a.getTime()) || isNaN(b.getTime())) return weekStart;
     return `${mo[a.getMonth()]} ${a.getDate()} – ${mo[b.getMonth()]} ${b.getDate()}, ${b.getFullYear()}`;
   })();
   const dirtyCount = Object.keys(dirty).length;
@@ -223,31 +236,57 @@ export default function AttendanceBoard() {
 
   const fetchAttendance = async () => {
     setLoading(true); setDateChanging(true);
+    // stale-response guard: fast date navigation must never render the
+    // wrong day's roster (M4)
+    const reqDate = date;
     try {
-      const res = await api.get(`/attendance/class/${classId}?date=${date}`);
-      setStudents(res.data.students.map(s => ({ ...s, status: s.status === 'Not Marked' ? 'P' : s.status })));
-    } catch (e) { console.error(e); }
+      const res = await api.get(`/attendance/class/${classId}?date=${reqDate}`);
+      setStudents(res.data.students.map(s => ({ ...s, status: s.status === 'Not Marked' ? null : s.status })));
+      setDirtyDaily({});
+    } catch (e) { console.error(e); showToast('Failed to load attendance', 'error'); }
     setTimeout(() => setDateChanging(false), 280);
     setLoading(false);
   };
 
   const toggleStatus = useCallback((id) => {
     setChangingId(id);
-    setStudents(prev => prev.map(s => s.id === id ? { ...s, status: (STATUS[s.status] || STATUS.P).next } : s));
+    setStudents(prev => prev.map(s => {
+      if (s.id !== id) return s;
+      const next = s.status ? (STATUS[s.status] || STATUS.P).next : 'P';
+      setDirtyDaily(d => ({ ...d, [id]: next }));
+      return { ...s, status: next };
+    }));
     setTimeout(() => setChangingId(null), 340);
   }, []);
 
-  const markAll = (status) => setStudents(prev => prev.map(s => ({ ...s, status })));
+  const markAll = (status) => {
+    setStudents(prev => prev.map(s => ({ ...s, status })));
+    setDirtyDaily(prev => {
+      const next = { ...prev };
+      students.forEach(s => { next[s.id] = status; });
+      return next;
+    });
+  };
 
   const present = students.filter(s => s.status === 'P');
   const absent = students.filter(s => s.status === 'A');
   const late = students.filter(s => s.status === 'L');
+  const unmarked = students.filter(s => !s.status);
+  const dailyDirtyCount = Object.keys(dirtyDaily).length;
 
   const save = async () => {
+    if (!dailyDirtyCount) { showToast('No changes to save yet', 'info'); return; }
     setSaving(true);
     try {
-      await api.post('/attendance/mark', { class_id: classId, date, marks: students.map(s => ({ student_id: s.id, status: s.status })) });
-      showToast('Attendance saved successfully!', 'success');
+      // Only the students actually touched on this visit are posted —
+      // pressing Save on an untouched roster can no longer write Present
+      // for the whole class (M17).
+      const marks = students
+        .filter(s => dirtyDaily[s.id] !== undefined)
+        .map(s => ({ student_id: s.id, status: s.status }));
+      await api.post('/attendance/mark', { class_id: classId, date, marks });
+      setDirtyDaily({});
+      showToast(`Attendance saved for ${marks.length} student${marks.length === 1 ? '' : 's'}!`, 'success');
     } catch { showToast('Failed to save attendance', 'error'); }
     setSaving(false);
   };
@@ -299,9 +338,9 @@ export default function AttendanceBoard() {
         <div className="card-stats cols-4">
           {[
             { v: students.length, l: 'Total Students', Icon: Users, accent: 'a-indigo' },
-            { v: present.length, l: 'Present Today', Icon: Check, accent: 'a-teal', bar: present.length, barColor: 'var(--teal)' },
-            { v: absent.length, l: 'Absent Today', Icon: X, accent: 'a-red', bar: absent.length, barColor: 'linear-gradient(90deg,#f87171,#dc2626)' },
-            { v: late.length, l: 'Late Today', Icon: Clock, accent: 'a-amber', bar: late.length, barColor: 'linear-gradient(90deg,#fbbf24,#d97706)' },
+            { v: present.length, l: 'Present', Icon: Check, accent: 'a-teal', bar: present.length, barColor: 'var(--teal)' },
+            { v: absent.length, l: 'Absent', Icon: X, accent: 'a-red', bar: absent.length, barColor: 'linear-gradient(90deg,#f87171,#dc2626)' },
+            { v: late.length, l: 'Late', Icon: Clock, accent: 'a-amber', bar: late.length, barColor: 'linear-gradient(90deg,#fbbf24,#d97706)' },
           ].map((s, i) => {
             const SIcon = s.Icon;
             return (
@@ -358,7 +397,11 @@ export default function AttendanceBoard() {
       <div className="card controls-bar" style={{ padding: 18, marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <div className="date-picker-wrap">
           <label className="filter-label" style={{ fontSize: 12 }}>Date</label>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} onKeyDown={e => e.preventDefault()} className="input" style={{ width: 'auto', minWidth: 150 }} />
+          {/* keyboard entry allowed — typing a date is a primary flow; only
+              stray wheel-scrolls are prevented below */}
+          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault(); }}
+            className="input" style={{ width: 'auto', minWidth: 150 }} aria-label="Attendance date" />
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => markAll('P')} className="btn btn-secondary" style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Check size={14} /> All Present</button>
@@ -372,6 +415,11 @@ export default function AttendanceBoard() {
             <tr><th style={{ width: 50, textAlign: 'center' }}>#</th><th>Student Name</th><th style={{ width: 140, textAlign: 'center' }}>Status</th></tr>
           </thead>
           <tbody key={`tbody-${date}`}>
+            {students.length === 0 && (
+              <tr><td colSpan={3} style={{ textAlign: 'center', padding: '32px 20px', color: 'var(--muted)' }}>
+                No students in this class yet.
+              </td></tr>
+            )}
             {students.map(s => (
               <motion.tr key={s.id} className="attendance-row" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.2 }}>
                 <td style={{ textAlign: 'center', color: 'var(--muted)', fontWeight: 600, fontSize: 13 }}>{s.id}</td>
@@ -385,11 +433,15 @@ export default function AttendanceBoard() {
         </table>
       </motion.div>
 
-      <div style={{ marginTop: 24 }}>
-        <motion.button onClick={save} disabled={saving} className="btn btn-primary"
-          whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }} style={{ padding: '12px 36px', fontSize: 15 }}>
-          {saving ? (<><motion.span className="spin-icon" animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }} style={{ marginRight: 8, display: 'inline-flex' }}><Loader2 size={16} /></motion.span>Saving...</>) : <><Save size={16} style={{ marginRight: 6, display: 'inline-flex', verticalAlign: '-2px' }} /> Save Attendance</>}
+      <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 14 }}>
+        <motion.button onClick={save} disabled={saving || !dailyDirtyCount} className="btn btn-primary"
+          whileHover={dailyDirtyCount ? { y: -2 } : {}} whileTap={{ scale: 0.97 }}
+          style={{ padding: '12px 36px', fontSize: 15, opacity: dailyDirtyCount ? 1 : 0.55 }}>
+          {saving ? (<><motion.span className="spin-icon" animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }} style={{ marginRight: 8, display: 'inline-flex' }}><Loader2 size={16} /></motion.span>Saving...</>) : <><Save size={16} style={{ marginRight: 6, display: 'inline-flex', verticalAlign: '-2px' }} /> Save Attendance{dailyDirtyCount ? ` (${dailyDirtyCount} change${dailyDirtyCount > 1 ? 's' : ''})` : ''}</>}
         </motion.button>
+        <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+          Tap a pill to cycle Present → Absent → Late.{unmarked.length > 0 ? ` ${unmarked.length} not yet marked.` : ''}
+        </span>
       </div>
       </>)}
 
@@ -429,16 +481,26 @@ export default function AttendanceBoard() {
                   <thead>
                     <tr>
                       <th style={{ minWidth: 170 }}>Student</th>
-                      {weekDays.map((d, i) => (
-                        <th key={d} className={`att-week-th${d === todayIso ? ' is-today' : ''}`} style={{ textAlign: 'center', width: 64 }}>
-                          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'][i]}
-                          <span className="att-week-date">{Number(d.slice(-2))}</span>
-                        </th>
-                      ))}
+                      {weekDays.map((d, i) => {
+                        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+                        const dt = new Date(`${d}T00:00:00`);
+                        const name = isNaN(dt.getTime()) ? `D${i + 1}` : dayNames[(dt.getDay() + 6) % 7];
+                        return (
+                          <th key={d} className={`att-week-th${d === todayIso ? ' is-today' : ''}`} style={{ textAlign: 'center', width: 64 }}>
+                            {name}
+                            <span className="att-week-date">{Number(d.slice(-2))}</span>
+                          </th>
+                        );
+                      })}
                       <th style={{ textAlign: 'center', width: 74 }}>Rate</th>
                     </tr>
                   </thead>
                   <tbody key={`wk-${weekStart}`}>
+                    {weekGrid.length === 0 && (
+                      <tr><td colSpan={weekDays.length + 2} style={{ textAlign: 'center', padding: '32px 20px', color: 'var(--muted)' }}>
+                        No students in this class yet.
+                      </td></tr>
+                    )}
                     {weekGrid.map(s => (
                       <motion.tr key={s.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18 }} className="attendance-row">
                         <td style={{ fontWeight: 600, fontSize: 14 }}>

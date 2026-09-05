@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+import os
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta, timezone
 import re
+import secrets
 import time
 from collections import defaultdict
 
@@ -18,12 +20,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-# Hardcoded super_admin credentials (Task 7-bugs-security #6). Created on
-# startup if no super_admin exists. Password is intentionally complex and
-# known only to the operators — change in production via the env override
-# below if you need to rotate.
-ROOT_ADMIN_EMAIL = "root.schoolai@nexus-secure.internal"
-ROOT_ADMIN_PASSWORD = "Tr!umphant-Str@tik-9173"
+# Bootstrap super_admin (created on startup only if missing). The password is
+# NEVER hardcoded here: operators set SCHOOLAI_ROOT_PASSWORD, and if unset we
+# generate a strong random one and print it ONCE to the server log on first
+# provisioning. A credential committed to source = instant account takeover.
+ROOT_ADMIN_EMAIL = os.environ.get("SCHOOLAI_ROOT_EMAIL", "root.schoolai@nexus-secure.internal")
 ROOT_ADMIN_FULL_NAME = "System Root"
 
 
@@ -100,6 +101,10 @@ def _record_failed(email: str) -> None:
     if not email:
         return
     key = email.lower().strip()
+    if len(_failed_attempts) >= LOCKOUT_TABLE_MAX_ENTRIES and key not in _failed_attempts:
+        # Evict ~10% oldest entries (defaultdict preserves insertion order).
+        for k in list(_failed_attempts.keys())[: LOCKOUT_TABLE_MAX_ENTRIES // 10]:
+            _failed_attempts.pop(k, None)
     state = _failed_attempts[key]
     state["count"] += 1
     if state["count"] >= MAX_FAILED_ATTEMPTS and state.get("locked_until") is None:
@@ -111,6 +116,11 @@ def _record_success(email: str) -> None:
     if not email:
         return
     _failed_attempts.pop(email.lower().strip(), None)
+
+
+# Cap the in-memory lockout table so unique-email floods can't grow it
+# without bound (memory DoS). Oldest entries are evicted first.
+LOCKOUT_TABLE_MAX_ENTRIES = 10_000
 
 
 def get_password_hash(password):
@@ -164,20 +174,27 @@ def _validate_password_strength(password: str) -> None:
 # Root super_admin bootstrap
 # ─────────────────────────────────────────────────────────────────────────────
 def ensure_root_admin(db: Session) -> None:
-    """Create the hardcoded super_admin account if it doesn't exist.
+    """Create the bootstrap super_admin account if it doesn't exist.
 
     Called on app startup from ``main.py`` after tables are created. Safe to
-    call repeatedly — it's a no-op once the user exists. The password is
-    hashed with the same scheme used for normal registration.
+    call repeatedly — it's a no-op once the user exists. The password comes
+    from the SCHOOLAI_ROOT_PASSWORD env var, or is generated randomly and
+    printed once to the server log so the operator can retrieve it.
     """
     existing = db.query(User).filter(User.email == ROOT_ADMIN_EMAIL).first()
     if existing:
         # Already provisioned. (We deliberately do NOT overwrite the password
         # here — if an operator rotated it via the admin UI, we keep it.)
         return
+    password = os.environ.get("SCHOOLAI_ROOT_PASSWORD")
+    generated = False
+    if not password:
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*"
+        password = "".join(secrets.choice(alphabet) for _ in range(20))
+        generated = True
     root = User(
         email=ROOT_ADMIN_EMAIL,
-        hashed_password=get_password_hash(ROOT_ADMIN_PASSWORD),
+        hashed_password=get_password_hash(password),
         role="super_admin",
         full_name=ROOT_ADMIN_FULL_NAME,
         school_id=None,
@@ -186,6 +203,11 @@ def ensure_root_admin(db: Session) -> None:
     db.add(root)
     db.commit()
     db.refresh(root)
+    if generated:
+        # One-time reveal so the operator can claim the account, then it is
+        # never printed again (the row exists on subsequent boots).
+        print(f"[setup] Bootstrap super_admin created: {ROOT_ADMIN_EMAIL}")
+        print(f"[setup] Password (shown once — store it now): {password}")
 
 
 @router.post("/register", response_model=Token)
@@ -213,7 +235,13 @@ def register(request: Request, user: UserCreate, db: Session = Depends(get_db)):
         assigned_class_id=user.assigned_class_id,
     )
     db.add(new_user)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        # Concurrent registrations with the same email can race past the
+        # existence check; the UNIQUE constraint is the arbiter of truth.
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Email already registered")
     db.refresh(new_user)
     return _token_for(new_user)
 

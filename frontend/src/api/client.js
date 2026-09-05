@@ -26,9 +26,14 @@ api.interceptors.response.use(
         `If running locally, make sure the backend is running on port 8000 (the Vite proxy forwards /api to it).`
       );
     }
-    if (error.response?.status === 401 || error.response?.status === 403) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+    // A failed LOGIN attempt must NOT wipe the session or hard-redirect:
+    // the user is mid-signin and the page's own error box handles it.
+    const isAuthCall = typeof error.config?.url === 'string' && error.config.url.includes('/auth/');
+    if (!isAuthCall && (error.response?.status === 401 || error.response?.status === 403)) {
+      try {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      } catch { /* ignore */ }
       if (!window.location.pathname.startsWith('/auth') && !window.location.pathname.startsWith('/login')) {
         window.location.href = '/login';
       }

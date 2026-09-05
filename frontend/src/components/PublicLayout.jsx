@@ -46,7 +46,9 @@ export default function PublicLayout({ children, flush = false, spy = null }) {
       if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
         current = spy[spy.length - 1].to;
       }
-      setSpyTo(current);
+      /* Only write state on change — writing every frame re-rendered the
+         whole shell for every scroll tick even when nothing changed. */
+      setSpyTo((prev) => (prev === current ? prev : current));
     };
     raf = requestAnimationFrame(update); // initial pass, off the effect body
     const schedule = () => { if (!raf) raf = requestAnimationFrame(update); };
@@ -58,6 +60,21 @@ export default function PublicLayout({ children, flush = false, spy = null }) {
       window.removeEventListener('resize', schedule);
     };
   }, [spy]);
+
+  /* Close the mobile menu on Escape / outside click. */
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
+    const onClick = (e) => {
+      if (!e.target.closest('.fx-nav')) setMenuOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onClick);
+    };
+  }, [menuOpen]);
 
   return (
     <div className={`public-shell${flush ? ' flush' : ''}`}>
@@ -105,7 +122,8 @@ export default function PublicLayout({ children, flush = false, spy = null }) {
             type="button"
             className="fx-nav-toggle public-nav-toggle"
             onClick={() => setMenuOpen(o => !o)}
-            aria-label="Toggle menu"
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={menuOpen}
           >
             {menuOpen ? <X size={18} /> : <Menu size={18} />}
           </button>

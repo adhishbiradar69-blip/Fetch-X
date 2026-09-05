@@ -11,7 +11,23 @@ plus the ``RateLimitExceeded`` exception handler).
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-# One limiter per process. ``key_func`` decides how a "client" is identified —
-# we use the remote IP, which is the standard choice and works behind most
-# proxies once ``X-Forwarded-For`` is trusted (uvicorn sets it by default).
-limiter = Limiter(key_func=get_remote_address)
+
+def _client_key(request):
+    """Rate-limit key that understands reverse proxies.
+
+    Render / Vercel / nginx terminate TLS and forward the real client IP in
+    X-Forwarded-For. Using only the socket address behind such a proxy lumps
+    every visitor into ONE bucket — a single attacker could then 429-lock the
+    whole userbase out of /auth/login. We take the left-most forwarded hop
+    (set by our own trusted proxy) and fall back to the socket address for
+    direct connections.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_client_key)

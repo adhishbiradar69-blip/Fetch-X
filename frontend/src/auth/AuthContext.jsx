@@ -23,25 +23,37 @@ export function isAdmin(role) {
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      // Corrupted / legacy value must never white-screen the whole app.
+      try { localStorage.removeItem('user'); } catch { /* ignore */ }
+      return null;
+    }
   });
-  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [token, setToken] = useState(() => {
+    try { return localStorage.getItem('token'); } catch { return null; }
+  });
 
   const login = async (email, password) => {
     const res = await api.post('/auth/login', { email, password });
     const { access_token, role, full_name, school_id, assigned_class_id } = res.data;
     const userData = { email, role, full_name, school_id, assigned_class_id };
-    localStorage.setItem('token', access_token);
-    localStorage.setItem('user', JSON.stringify(userData));
+    try {
+      localStorage.setItem('token', access_token);
+      localStorage.setItem('user', JSON.stringify(userData));
+    } catch { /* storage full/unavailable — session works in-memory */ }
     setToken(access_token);
     setUser(userData);
     return userData;
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    try {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+    } catch { /* ignore */ }
     setToken(null);
     setUser(null);
   };

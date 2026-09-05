@@ -12,5 +12,11 @@ services:
         sync: false  # set this manually after creating the Vercel frontend
       - key: GROQ_API_KEY
         sync: false  # optional: set if you have a Groq key
+      - key: SCHOOLAI_SECRET_KEY
+        generateValue: true  # JWT signing key — auto-generated per deploy, do NOT reuse elsewhere
+      - key: SCHOOLAI_ENV
+        value: production  # disables demo seed endpoints
+      - key: SCHOOLAI_ROOT_PASSWORD
+        sync: false  # set manually — bootstrap super_admin password (or let the server generate + log one)
     healthCheckPath: /
     autoDeploy: true

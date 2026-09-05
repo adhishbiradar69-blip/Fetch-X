@@ -37,10 +37,14 @@ export function CountUp({ value = 0, decimals = 0, duration = 0.9, className, st
 /* Toast with a shrinking progress bar + swipe-to-dismiss.
    Flat tints on a hard-offset-shadow card (design system). */
 export function Toast({ message, type = 'success', onClose, duration = 2600 }) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
-    const t = setTimeout(onClose, duration);
+    // Timer depends on `duration` only — an unstable inline `onClose` from
+    // the parent must NOT restart the dismiss countdown on every render.
+    const t = setTimeout(() => closeRef.current(), duration);
     return () => clearTimeout(t);
-  }, [onClose, duration]);
+  }, [duration]);
 
   const colors = {
     success: { bg: '#e3f5ed', color: '#0b7a5c', Icon: CheckCircle2 },
@@ -52,6 +56,8 @@ export function Toast({ message, type = 'success', onClose, duration = 2600 }) {
     <div className="toast-host">
       <motion.div
         className="toast toast-pro"
+        role="status"
+        aria-live="polite"
         initial={{ opacity: 0, y: -40, scale: 0.9 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: -40, scale: 0.9 }}
@@ -59,18 +65,18 @@ export function Toast({ message, type = 'success', onClose, duration = 2600 }) {
         drag="y"
         dragConstraints={{ top: 0, bottom: 0 }}
         dragElastic={0.4}
-        onDragEnd={(e, info) => { if (info.offset.y < -30) onClose(); }}
+        onDragEnd={(e, info) => { if (info.offset.y < -30) closeRef.current(); }}
         style={{ background: colors.bg, color: colors.color }}
       >
         <span className="toast-icon"><colors.Icon size={18} strokeWidth={2.5} /></span>
         <span>{message}</span>
-        <div className="toast-bar">
+        <div className="toast-bar" aria-hidden="true">
           <motion.div
             className="toast-bar-fill"
-            initial={{ width: '100%' }}
-            animate={{ width: '0%' }}
-            transition={{ duration: duration / 1000, ease: 'linear' }}
-            style={{ background: colors.color }}
+            initial={{ scaleX: 1 }}
+            animate={{ scaleX: 0 }}
+            /* transform-based (compositor-only) instead of width — no layout thrash */
+            style={{ background: colors.color, transformOrigin: 'left' }}
           />
         </div>
       </motion.div>
@@ -90,8 +96,35 @@ export function ToastHost({ toast, onClose }) {
 }
 
 /* Modal with backdrop fade + spring scale. Visual styling (radius 16,
-   hard offset shadow) lives in .modal-content/.modal-pro CSS. */
+   hard offset shadow) lives in .modal-content/.modal-pro CSS.
+   Adds the dialog semantics the ShortcutsOverlay promises: Escape closes,
+   focus moves to the dialog on open, and background scroll is locked. */
 export function Modal({ open, onClose, children, title, wide }) {
+  const cardRef = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') closeRef.current(); };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    // Move focus into the dialog for keyboard users.
+    const t = setTimeout(() => {
+      const el = cardRef.current;
+      if (!el) return;
+      const target = el.querySelector('[data-autofocus]') || el.querySelector('button, [href], input, select, textarea');
+      if (target) target.focus({ preventScroll: true });
+      else el.setAttribute('tabindex', '-1'), el.focus({ preventScroll: true });
+    }, 30);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+      clearTimeout(t);
+    };
+  }, [open]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -104,7 +137,11 @@ export function Modal({ open, onClose, children, title, wide }) {
           onClick={onClose}
         >
           <motion.div
+            ref={cardRef}
             className={`modal-content modal-pro ${wide ? 'modal-wide' : ''}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label={typeof title === 'string' ? title : 'Dialog'}
             initial={{ opacity: 0, scale: 0.92, y: 18 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.94, y: 10 }}

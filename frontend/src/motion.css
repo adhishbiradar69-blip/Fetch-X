@@ -1,24 +1,12 @@
 /* ============================================================
    Fetch-X — motion + appended feature layer (rewritten).
-   Sits on top of index.css. Login suite, ambient orbs, page-host,
+   Sits on top of index.css. Login suite, page-host,
    and the reduced-motion kill switch live here.
    All other legacy feature selectors were folded into index.css
    remapped to the new design language.
+   (Ambient orb layer removed — decorative infinite loops that
+   no JSX rendered.)
    ============================================================ */
-
-/* ===== AMBIENT ORBS (compat — much subtler, brand-tinted) ===== */
-.ambient-orbs { position:fixed; inset:0; pointer-events:none; z-index:0; overflow:hidden; }
-.orb { position:absolute; border-radius:50%; filter:blur(46px); opacity:.4; }
-.orb-1 { width:460px; height:460px; top:-120px; right:-80px;
-  background:radial-gradient(circle,rgba(109,94,245,.16),transparent 70%);
-  animation:orbFloat1 22s ease-in-out infinite; }
-.orb-2 { width:380px; height:380px; bottom:-100px; left:18%;
-  background:radial-gradient(circle,rgba(14,159,110,.1),transparent 70%);
-  animation:orbFloat2 26s ease-in-out infinite; }
-.orb-3 { width:300px; height:300px; top:40%; left:-60px;
-  background:radial-gradient(circle,rgba(134,120,249,.12),transparent 70%);
-  animation:orbFloat3 30s ease-in-out infinite; }
-body.dark .orb { opacity:.3; }
 
 /* ===== PAGE HOST (route transition wrapper) ===== */
 .page-host { position:relative; z-index:1; }

@@ -78,15 +78,21 @@ export default function ChairpersonRankings() {
 }
 
 function SchoolInspectView({ data }) {
+  // FIX (H3): the inspect payload nests scalars under `summary` and
+  // classes/students are raw object ARRAYS — reading data.total_students ||
+  // data.students directly rendered an object array → "Objects are not valid
+  // as a React child" crash on every inspect open (same bug fixed in
+  // MultiSchool's SchoolInspect). Subjects expose `average`, not `average_pct`.
+  const s = data.summary || {};
   const grades = data.grades || [];
   const subjects = data.subjects || [];
   return (
     <div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:12,marginBottom:16}}>
-        <div className="kpi-tile"><div className="kpi-tile-label">Students</div><div className="kpi-tile-value">{data.total_students||data.students||'—'}</div></div>
-        <div className="kpi-tile"><div className="kpi-tile-label">Classes</div><div className="kpi-tile-value">{data.total_classes||data.classes||'—'}</div></div>
-        <div className="kpi-tile"><div className="kpi-tile-label">Average</div><div className="kpi-tile-value" style={{color:gradeColor(data.school_average||data.average||0)}}>{fmt(data.school_average||data.average,1)}%</div></div>
-        <div className="kpi-tile"><div className="kpi-tile-label">At-Risk</div><div className="kpi-tile-value">{data.at_risk_count ?? '—'}</div></div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:12,marginBottom:16}} className="inspect-kpis">
+        <div className="kpi-tile"><div className="kpi-tile-label">Students</div><div className="kpi-tile-value">{s.students ?? data.total_students ?? '—'}</div></div>
+        <div className="kpi-tile"><div className="kpi-tile-label">Classes</div><div className="kpi-tile-value">{s.classes ?? data.total_classes ?? '—'}</div></div>
+        <div className="kpi-tile"><div className="kpi-tile-label">Average</div><div className="kpi-tile-value" style={{color:gradeColor(s.average_pct ?? data.school_average ?? 0)}}>{fmt(s.average_pct ?? data.school_average,1)}%</div></div>
+        <div className="kpi-tile"><div className="kpi-tile-label">At-Risk</div><div className="kpi-tile-value">{s.at_risk_count ?? data.at_risk_count ?? '—'}</div></div>
       </div>
       {grades.length > 0 && (
         <>
@@ -105,7 +111,7 @@ function SchoolInspectView({ data }) {
           <div className="table-premium">
             <table>
               <thead><tr><th>Subject</th><th style={{textAlign:'center'}}>Average</th><th style={{textAlign:'center'}}>Pass Rate</th></tr></thead>
-              <tbody>{subjects.map((s,i)=><tr key={i}><td style={{fontWeight:600}}>{s.name}</td><td style={{textAlign:'center',fontWeight:700,color:gradeColor(s.average)}}>{fmt(s.average,1)}%</td><td style={{textAlign:'center'}}>{fmt(s.pass_rate,1)}%</td></tr>)}</tbody>
+              <tbody>{subjects.map((s,i)=><tr key={i}><td style={{fontWeight:600}}>{s.name}</td><td style={{textAlign:'center',fontWeight:700,color:gradeColor(s.average_pct ?? s.average ?? 0)}}>{fmt(s.average_pct ?? s.average,1)}%</td><td style={{textAlign:'center'}}>{fmt(s.pass_rate,1)}%</td></tr>)}</tbody>
             </table>
           </div>
         </>
