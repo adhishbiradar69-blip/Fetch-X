@@ -5,7 +5,9 @@
    dashboard; the ADMINISTRATION group highlights the current page. */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Moon, Sun } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
+import { useTheme } from './ThemeProvider';
 import DashSidebar from '../pages/Principal/dashboard/DashSidebar';
 import { LevelThemeStyle } from '../pages/Principal/dashboard/LevelThemes';
 import { fetchCtMe } from '../pages/Principal/dashboard/data';
@@ -15,6 +17,7 @@ import '../pages/Principal/dashboard/v15.css';
 export default function AdminShell({ adminKey, children }) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { mode, toggle } = useTheme() || {};
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try { return localStorage.getItem('si-nav') === '1'; } catch { return false; }
   });
@@ -58,7 +61,19 @@ export default function AdminShell({ adminKey, children }) {
         adminActive={adminKey}
         savedHidden
       />
-      <main className="v15-main pd-main">{children}</main>
+      <main className="v15-main pd-main" style={{ position: 'relative' }}>
+        {/* theme toggle — the old chrome had one; the v15 shell must too */}
+        <div style={{ position: 'absolute', top: 2, right: 0, zIndex: 5 }}>
+          <button
+            type="button" className="btn-mode" onClick={toggle}
+            title={mode === 'dark' ? 'Light mode' : 'Dark mode'}
+            aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {mode === 'dark' ? <Sun strokeWidth={2} /> : <Moon strokeWidth={2} />}
+          </button>
+        </div>
+        {children}
+      </main>
       <button type="button" className="v15-mobtoggle" aria-label="Open navigation" onClick={() => setMobNav(true)}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
       </button>

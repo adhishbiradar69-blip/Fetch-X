@@ -74,6 +74,42 @@ Other schools follow the same pattern: `principal@sunrise.test`, `sunrise@admin.
 Drop a `gnps-logo.png` into `frontend/public/` and it replaces the Fetch-X mark
 in the dashboard sidebar and the AI panel (falls back gracefully when absent).
 
+
+## Run with Docker (recommended)
+
+```bash
+# 1. one-time secrets next to docker-compose.yml
+echo "SCHOOLAI_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")" > .env
+echo "GROQ_API_KEY=gsk_..." >> .env          # optional — AI assistant
+
+# 2. build + run
+docker compose up --build -d
+#   frontend  → http://localhost:8080
+#   backend   → http://localhost:8000/docs
+
+# 3. first boot: the super-admin password prints ONCE in the logs
+docker compose logs backend | grep "Password"
+
+# 4. optional demo data (3 schools, 2,700 students)
+docker compose exec backend python seed_demo.py
+```
+
+SQLite lives in the `fetchx-db` volume (`/app/data`), so data survives
+rebuilds. The frontend nginx proxies `/api` to the backend — no CORS setup
+needed.
+
+## Production checklist (non-Docker deploys)
+
+| What | Where |
+|---|---|
+| `SCHOOLAI_SECRET_KEY` | backend env — **required**, sessions die without it on restart |
+| `SCHOOLAI_ENV=production` | backend env — disables demo seed + self-signup |
+| `SCHOOLAI_ALLOW_SIGNUP=true` | backend env — only if you want public school-admin signup |
+| `SCHOOLAI_ROOT_PASSWORD` | backend env — sets the bootstrap super-admin password |
+| `GROQ_API_KEY` | backend env or `backend/.env` — enables the live AI (auto-loaded) |
+| `VITE_API_URL` | frontend build env — backend origin (Render/Vercel split deploys) |
+| `ALLOWED_ORIGINS` | backend env — comma-separated frontend origins |
+
 ## AI configuration (optional)
 The principal & chairperson AI assistants use Groq by default. Set a Groq API key:
 ```bash

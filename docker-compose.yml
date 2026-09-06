@@ -1,0 +1,51 @@
+# Fetch-X — full stack in two containers.
+#
+#   docker compose up --build
+#   → frontend:  http://localhost:8080
+#   → backend:   http://localhost:8000/docs
+#
+# First boot creates an empty database + a bootstrap super-admin (password is
+# printed once in `docker compose logs backend`). For demo data:
+#   docker compose exec backend python seed_demo.py
+#
+# Set these in a .env file next to docker-compose.yml (never commit it):
+#   SCHOOLAI_SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32)")>
+#   GROQ_API_KEY=gsk_...            (optional — AI assistant)
+#   SCHOOLAI_ROOT_PASSWORD=<your-choice>   (optional — else random, printed once)
+services:
+  backend:
+    build: ./backend
+    container_name: fetchx-backend
+    restart: unless-stopped
+    volumes:
+      - fetchx-db:/app/data
+    environment:
+      # 1 worker: the login lockout + rate-limit counters are in-process
+      SCHOOLAI_ENV: production
+      SCHOOLAI_SECRET_KEY: ${SCHOOLAI_SECRET_KEY:?set SCHOOLAI_SECRET_KEY in .env}
+      SCHOOLAI_ROOT_PASSWORD: ${SCHOOLAI_ROOT_PASSWORD:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      SCHOOLAI_DATABASE_URL: sqlite:////app/data/school.db
+      # the browser only ever talks to the nginx proxy (same origin), but a
+      # reachable backend origin is kept for direct API use
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/docs').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    container_name: fetchx-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+
+volumes:
+  fetchx-db:

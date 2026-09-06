@@ -1,0 +1,12 @@
+*.log
+school.db
+school.db-shm
+school.db-wal
+school.db-journal
+.env
+.env.*
+__pycache__/
+*.pyc
+venv/
+qa/
+Dockerfile

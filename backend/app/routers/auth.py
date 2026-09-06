@@ -216,6 +216,11 @@ def register(request: Request, user: UserCreate, db: Session = Depends(get_db)):
     # SECURITY hardening: self-signup may only ever create a school_admin
     # bound to an existing school. super_admin accounts are provisioned
     # exclusively by the startup root-admin seed / operator action.
+    # On top of that, sign-up is OFF in production unless the operator
+    # explicitly opts in (SCHOOLAI_ALLOW_SIGNUP=true) — otherwise anyone who
+    # finds the deployment could make themselves an admin of a real school.
+    if config.IS_PRODUCTION and os.environ.get("SCHOOLAI_ALLOW_SIGNUP", "").strip().lower() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=403, detail="Self-registration is disabled on this deployment.")
     if user.role != "school_admin":
         raise HTTPException(status_code=403, detail="Self-registration is only allowed for the school_admin role.")
     _validate_email(user.email)

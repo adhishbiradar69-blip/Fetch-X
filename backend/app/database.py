@@ -2,8 +2,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import event
+import os
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./school.db"
+# SCHOOLAI_DATABASE_URL lets deployments point at a mounted volume (Docker)
+# or a future Postgres; the default stays the local file for dev.
+SQLALCHEMY_DATABASE_URL = os.environ.get("SCHOOLAI_DATABASE_URL", "sqlite:///./school.db")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
