@@ -19,6 +19,8 @@ const allNavGroups = [
   {
     label: 'Class Teacher',
     roles: ['class_teacher', ...A],
+    /* v15: class teachers work inside the designed console (own chrome);
+       admins keep the classic boards, which still live under these URLs. */
     items: [
       { path: '/teacher/attendance', label: 'Attendance', icon: ClipboardList },
       { path: '/teacher/tasks', label: 'Tasks', icon: CheckSquare },

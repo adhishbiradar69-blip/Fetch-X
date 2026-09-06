@@ -6,7 +6,7 @@ import { fetchStudents } from './data';
 import { initials, pct } from './util';
 
 export default function GlobalSearch({
-  inputRef, classesAll = [], teachers = [], onOpenClass, onOpenStudent, onOpenTeacher,
+  inputRef, classesAll = [], teachers = [], subjects = [], onOpenClass, onOpenStudent, onOpenTeacher, onOpenSubject,
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
@@ -64,12 +64,20 @@ export default function GlobalSearch({
     () => visibleStudents.map((s, i) => ({ s, me: classes.length + teacherRows.length + i })),
     [visibleStudents, classes.length, teacherRows.length],
   );
+  const subjectRows = useMemo(
+    () => (subjects || [])
+      .filter((s) => !ql || String(s.name).toLowerCase().includes(ql))
+      .slice(0, 4)
+      .map((s, i) => ({ s, me: classes.length + teacherRows.length + studentRows.length + i })),
+    [subjects, ql, classes.length, teacherRows.length, studentRows.length],
+  );
 
   const flat = useMemo(() => [
     ...classRows.map(({ c }) => ({ kind: 'class', c })),
+    ...subjectRows.map(({ s }) => ({ kind: 'subject', s })),
     ...teacherRows.map(({ t }) => ({ kind: 'teacher', t })),
     ...studentRows.map(({ s }) => ({ kind: 'student', s })),
-  ], [classRows, teacherRows, studentRows]);
+  ], [classRows, subjectRows, teacherRows, studentRows]);
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -86,6 +94,7 @@ export default function GlobalSearch({
     setQ('');
     inputRef.current?.blur();
     if (item.kind === 'class') onOpenClass(item.c.id);
+    else if (item.kind === 'subject') onOpenSubject?.(item.s);
     else if (item.kind === 'teacher') onOpenTeacher(item.t);
     else onOpenStudent(item.s);
   };
@@ -126,7 +135,7 @@ export default function GlobalSearch({
       <kbd>Ctrl K</kbd>
       {open && query ? (
         <div className="gs-pop open" ref={popRef}>
-          {!classes.length && !visibleStudents.length && !loading ? (
+          {!classes.length && !visibleStudents.length && !subjectRows.length && !loading ? (
             <div className="gs-empty">No matches for “{query}”</div>
           ) : null}
           {classes.length ? <div className="gs-sec">CLASSES</div> : null}
@@ -168,6 +177,20 @@ export default function GlobalSearch({
               <span className="avatar">{initials(s.name)}</span>
               {s.name}
               <span className="gs">{s.className} · {pct(s.avg)}%</span>
+            </div>
+          ))}
+          {subjectRows.length ? <div className="gs-sec">SUBJECTS</div> : null}
+          {subjectRows.map(({ s, me }) => (
+            <div
+              key={`sub${s.id ?? s.name}`}
+              className="gs-item"
+              style={me === active ? { background: 'var(--hov)' } : undefined}
+              onMouseDown={(e) => { e.preventDefault(); choose({ kind: 'subject', s }); }}
+              onMouseEnter={() => setActive(me)}
+            >
+              <span className="gi">▣</span>
+              {s.name}
+              <span className="gs">{pct(s.avg)}%</span>
             </div>
           ))}
           {loading ? <div className="gs-empty">Searching…</div> : null}

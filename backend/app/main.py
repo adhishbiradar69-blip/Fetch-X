@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import engine, Base, SessionLocal, ensure_unique_indexes
 from app.models import user, user_school, school, class_, student, attendance, task, mark, subject, grade_subject, exam, teacher_assignment
-from app.routers import auth, admin, attendance, tasks, academics, principal, chairperson, parent
+from app.routers import auth, admin, attendance, tasks, academics, principal, chairperson, parent, timetable, ct
 from app.rate_limit import limiter
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -111,6 +111,8 @@ app.include_router(academics.router)
 app.include_router(principal.router)
 app.include_router(chairperson.router)
 app.include_router(parent.router)
+app.include_router(timetable.router)
+app.include_router(ct.router)
 
 
 @app.exception_handler(Exception)

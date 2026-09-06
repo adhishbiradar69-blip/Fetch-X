@@ -1,14 +1,17 @@
-/* Class detail in-page view (#class=<id>) — mirrors dashboard.html's
-   classDetailView: overview strip, distro, student comparison bars,
-   02-style subject cards and the ranked student list with attendance. */
+/* Class detail in-page view (#class=<id>) — designer v15 classDetailView:
+   overview strip, score distribution, ATTENDANCE TREND with range tabs
+   (v15), student comparison bars with per-subject metric tabs (v15),
+   02-style subject cards, ranked student list and the weekly TIMETABLE
+   (v15, new backend /timetable/class/{id}). */
 import { useEffect, useMemo, useState } from 'react';
 import {
   BookOpen, Bookmark, CalendarCheck2, ClipboardCheck, Search, School, Trophy, Users,
 } from 'lucide-react';
-import { fetchClassDetail } from './data';
-import { Donut, Distro, BarChart, Trend, useReveal } from './charts';
+import { fetchAttendanceSeriesScoped, fetchClassDetail } from './data';
+import { Donut, Distro, BarChart, LineChart, Trend, useReveal } from './charts';
 import { SectionHead, Chip, TeachPill } from './Sections';
-import { initials, mean, pct } from './util';
+import { ClassTimetable } from './Timetable';
+import { ATT_TABS, initials, mean, pct } from './util';
 
 function StatCell({ icon: Icon, k, v, of, sep }) {
   return (
@@ -22,11 +25,20 @@ function StatCell({ icon: Icon, k, v, of, sep }) {
   );
 }
 
-export default function ClassDetail({ classId, classesAll, onBack, onOpenReport, savedIds, onBookmark }) {
+const SUBJ_SHORT = (n) => String(n).toUpperCase().slice(0, 8);
+
+/* fetcher: where the class detail comes from — the principal endpoint or
+   the class teacher's scoped /ct/class-dashboard (v15 CT console "My Class"). */
+export default function ClassDetail({ classId, classesAll, onBack, onOpenReport, savedIds, onBookmark, fetcher, embedded = false, backLabel = 'PRINCIPAL DASHBOARD' }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
+
+  /* v15: attendance trend + range, comparison metric */
+  const [attRange, setAttRange] = useState('3M');
+  const [attPoints, setAttPoints] = useState(null);
+  const [barMetric, setBarMetric] = useState('overall');
 
   useEffect(() => {
     let alive = true;
@@ -35,8 +47,11 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
       setErr(null);
       setData(null);
       setFilter('');
+      setBarMetric('overall');
+      setAttRange('3M');
+      setAttPoints(null);
       try {
-        const d = await fetchClassDetail(classId);
+        const d = await (fetcher || fetchClassDetail)(classId);
         if (alive) setData(d);
       } catch (e) {
         if (alive) setErr(e);
@@ -46,7 +61,22 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
     };
     run();
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetcher is a stable per-caller identity
   }, [classId]);
+
+  /* attendance trend for THIS class (scoped series endpoint) */
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      setAttPoints(null);
+      const days = { '30D': 30, '3M': 92, '6M': 183, '1Y': 365 }[attRange] || 92;
+      await fetchAttendanceSeriesScoped({ scope: 'class', id: classId, days })
+        .then((d) => { if (alive) setAttPoints(d.points || []); })
+        .catch(() => { if (alive) setAttPoints([]); });
+    };
+    run();
+    return () => { alive = false; };
+  }, [classId, attRange]);
 
   const info = data?.info;
   const subjects = useMemo(() => data?.subjects || [], [data]);
@@ -67,12 +97,25 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
   const taskPct = info ? pct(info.tasks_pct) : 0;
   const overall = info ? Math.round((marksAvg + taskPct + attPct) / 3) : 0;
 
-  const barItems = useMemo(
-    () => students
-      .map((s) => ({ key: s.id, label: initials(s.name), tip: `${s.name} · ${pct(s.avg)}% · class rank #${s.rank}`, val: pct(s.avg) }))
-      .sort((a, b) => b.val - a.val),
-    [students],
-  );
+  /* v15 comparison tabs: OVERALL + each subject of this class */
+  const BAR_TABS = useMemo(() => {
+    const tabs = { overall: 'OVERALL' };
+    subjects.forEach((s, i) => { tabs[String(i)] = SUBJ_SHORT(s.name); });
+    return tabs;
+  }, [subjects]);
+
+  const barItems = useMemo(() => {
+    const idx = Number(barMetric);
+    const sub = subjects[idx];
+    return students
+      .map((s) => {
+        const v = (barMetric === 'overall' || !sub)
+          ? pct(s.avg)
+          : pct(s.subject_scores?.[sub.name] ?? s.avg);
+        return { key: s.id, label: initials(s.name), tip: `${s.name} · ${v}% · class rank #${s.rank}`, val: v };
+      })
+      .sort((a, b) => b.val - a.val);
+  }, [students, barMetric, subjects]);
 
   const list = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -85,26 +128,28 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
 
   return (
     <div>
-      <div className="cd-head">
-        <div>
-          <button type="button" className="btn-back" onClick={onBack}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
-            PRINCIPAL DASHBOARD
-          </button>
-          <div className="eyebrow">SCHOOL INTELLIGENCE · CLASS LEVEL</div>
-          <h1>Class {name}</h1>
-          <div className="subtitle">Class-wide academic and operational performance.</div>
-          {info?.ct_name && (
-            <div style={{ marginTop: 10 }}>
-              <TeachPill name={info.ct_name} tag={info.ct_subject ? `CT · ${info.ct_subject}` : 'CT'} title={`Class Teacher · ${info.ct_name}`} />
-            </div>
-          )}
+      {!embedded && (
+        <div className="cd-head">
+          <div>
+            <button type="button" className="btn-back" onClick={onBack}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
+              {backLabel}
+            </button>
+            <div className="eyebrow">SCHOOL INTELLIGENCE · CLASS LEVEL</div>
+            <h1>Class {name}</h1>
+            <div className="subtitle">Class-wide academic and operational performance.</div>
+            {info?.ct_name && (
+              <div style={{ marginTop: 10 }}>
+                <TeachPill name={info.ct_name} tag={info.ct_subject ? `CT · ${info.ct_subject}` : 'CT'} title={`Class Teacher · ${info.ct_name}`} />
+              </div>
+            )}
+          </div>
+          <div className="bigrank">
+            <span className="pill">{info ? `#${info.rank} / ${totalClasses || '—'}` : '…'}</span>
+            <span className="sub">CLASS RANKING</span>
+          </div>
         </div>
-        <div className="bigrank">
-          <span className="pill">{info ? `#${info.rank} / ${totalClasses || '—'}` : '…'}</span>
-          <span className="sub">CLASS RANKING</span>
-        </div>
-      </div>
+      )}
 
       {loading && <div className="pd-skel tall" />}
       {err && !loading && (
@@ -149,9 +194,32 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
                 : <div className="pd-note">No distribution data.</div>}
             </div>
 
+            {/* v15: class attendance trend with range tabs */}
             <div className="card chart-card fade">
               <div className="chead">
-                <span className="label">STUDENT COMPARISON · ALL-TERM AVERAGE · {students.length} STUDENTS</span>
+                <span className="label">ATTENDANCE TREND · CLASS {name}{attRange ? ` · LAST ${ATT_TABS[attRange]}` : ''}</span>
+                <div className="ctabs">
+                  {Object.entries(ATT_TABS).map(([k, label]) => (
+                    <button key={k} type="button" className={`gtab${k === attRange ? ' active' : ''}`} onClick={() => setAttRange(k)}>{label}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="cbody">
+                {attPoints
+                  ? <LineChart points={attPoints} rangeKey={attRange} />
+                  : <div className="pd-skel tall" />}
+              </div>
+            </div>
+
+            {/* v15: student comparison with metric tabs */}
+            <div className="card chart-card fade">
+              <div className="chead">
+                <span className="label">STUDENT COMPARISON · {BAR_TABS[String(barMetric)] || 'OVERALL'} · {students.length} STUDENTS</span>
+                <div className="ctabs">
+                  {Object.entries(BAR_TABS).map(([k, label]) => (
+                    <button key={k} type="button" className={`gtab${String(barMetric) === k ? ' active' : ''}`} onClick={() => setBarMetric(k)}>{label}</button>
+                  ))}
+                </div>
               </div>
               <div className="cbody">
                 <BarChart
@@ -225,6 +293,16 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
                 {!list.length && <div className="noresult">No students match your search.</div>}
               </div>
             </div>
+          </section>
+
+          {/* v15: the weekly timetable */}
+          <section className="lvl lvl-3 compact">
+            <SectionHead
+              title="Timetable"
+              sub={`Weekly schedule for Class ${name} — conflict-free across every teacher.`}
+              tag="MON–SAT · 9 PERIODS"
+            />
+            <ClassTimetable classId={classId} />
           </section>
         </>
       )}

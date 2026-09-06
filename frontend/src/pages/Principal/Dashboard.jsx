@@ -1,25 +1,23 @@
-/* Fetch-X — Principal Dashboard.
-   Exact port of the designer prototype (upload/dashboard.html) to React
-   with REAL backend data. Route: /principal/dashboard (unchanged).
-
-   Structure mirrors dashboard.html:
-     pagehead (global search + mode/compare/academic buttons)
-     ├─ 01 School Level (.lvl-1)     ├─ 02 Subject Level (.lvl-2)
-     ├─ 03 Class Level (.lvl-3)      ├─ 04 Student Level (.lvl-4)
-     ├─ class detail view (#class=<id>)   ├─ saved students view (#saved)
-     ├─ resizable AI right panel (real /principal/ai/analyze)
-     └─ report card / compare / academic performance modals
-   View state lives in location.hash so back/forward work. */
+/* Fetch-X — Principal Dashboard (designer v15).
+   Port of dashboard(2).html v15 with REAL backend data. Route:
+   /principal/dashboard (unchanged). The page now owns its full chrome —
+   the v15 sidebar (level links + Saved + sign out), level themes
+   (50-swatch popover per level), subject detail view (#subject=<id>),
+   per-subject class-comparison tabs, rank-band student tabs, and the
+   resizable AI right panel (real /principal/ai/analyze). */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { GitCompare, Moon, Plus, Sun } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { GitCompare, Menu, Moon, Plus, Sun, X } from 'lucide-react';
 import {
-  fetchAttendanceSeries, fetchClassComparison, fetchClasses, fetchScoreDistribution,
-  fetchSchoolRank, fetchStats, fetchStudents, fetchTeachers, fetchTermAverages,
+  fetchAttendanceSeries, fetchClassComparison, fetchClassComparisonBySubject, fetchClasses,
+  fetchScoreDistribution, fetchSchoolRank, fetchStats, fetchStudents, fetchTeachers,
+  fetchTermAverages,
 } from './dashboard/data';
 import { loadFolders, saveFolders } from './dashboard/util';
 import { SectionSchool, SectionSubjects, SectionClasses, SectionStudents, SectionTeachers } from './dashboard/Sections';
 import ClassDetail from './dashboard/ClassDetail';
+import SubjectDetail from './dashboard/SubjectDetail';
 import SavedStudents from './dashboard/SavedStudents';
 import ReportCardModal from './dashboard/ReportCardModal';
 import TeacherReportModal from './dashboard/TeacherReportModal';
@@ -27,20 +25,29 @@ import CompareModal from './dashboard/CompareModal';
 import AcademicModal from './dashboard/AcademicModal';
 import AiPanel from './dashboard/AiPanel';
 import GlobalSearch from './dashboard/GlobalSearch';
+import DashSidebar from './dashboard/DashSidebar';
+import { LevelThemeStyle } from './dashboard/LevelThemes';
 import { useTheme } from '../../components/ThemeProvider';
+import { useAuth } from '../../auth/AuthContext';
 import { Toast } from '../../components/ui';
 import './dashboard/dashboard.css';
+import './dashboard/v15.css';
 
 const PAGE_SIZE = 30;
 
 /* pure hash → route parse (lazy initial state keeps first render correct) */
 const parseHash = (h) => {
-  if (h && h.startsWith('class=')) return { view: 'class', classId: decodeURIComponent(h.slice(6)) };
-  if (h === 'saved') return { view: 'saved', classId: null };
-  return { view: 'dash', classId: null };
+  if (h && h.startsWith('class=')) return { view: 'class', id: decodeURIComponent(h.slice(6)) };
+  if (h && h.startsWith('subject=')) return { view: 'subject', id: decodeURIComponent(h.slice(8)) };
+  if (h === 'saved') return { view: 'saved', id: null };
+  return { view: 'dash', id: null };
 };
 
 export default function PrincipalDashboard() {
+  const navigate = useNavigate();
+  const { logout, user } = useAuth();
+  const { mode, toggle } = useTheme() || {};
+
   /* ---------------- section data ---------------- */
   const [stats, setStats] = useState(null);
   const [statsErr, setStatsErr] = useState(false);
@@ -51,15 +58,17 @@ export default function PrincipalDashboard() {
 
   const [attRange, setAttRange] = useState('3M');
   const [attPoints, setAttPoints] = useState(null);
-  const [cmpMetric, setCmpMetric] = useState('avg');
+  /* v15: comparison metric = 'overall' | subject id */
+  const [cmpMetric, setCmpMetric] = useState('overall');
   const [cmpClasses, setCmpClasses] = useState(null);
 
   const [grade, setGrade] = useState('all');
   const [classesList, setClassesList] = useState(null);
   const [teachers, setTeachers] = useState(null);
 
-  /* ---------------- students (server-paginated) ---------------- */
+  /* ---------------- students (server-paginated, v15 rank bands) ---- */
   const [query, setQuery] = useState('');
+  const [minAvg, setMinAvg] = useState(0);
   const [stRows, setStRows] = useState([]);
   const [stTotal, setStTotal] = useState(null);
   const [stPage, setStPage] = useState(1);
@@ -76,8 +85,7 @@ export default function PrincipalDashboard() {
 
   /* ---------------- views + modals ---------------- */
   const [route, setRoute] = useState(() => parseHash(location.hash.replace(/^#/, '')));
-  const view = route.view; // dash | class | saved
-  const classId = route.classId;
+  const view = route.view; // dash | class | subject | saved
   const [reportId, setReportId] = useState(null);
   const [teacherId, setTeacherId] = useState(null);
   const [showCompare, setShowCompare] = useState(false);
@@ -92,13 +100,17 @@ export default function PrincipalDashboard() {
 
   const mainRef = useRef(null);
   const gsRef = useRef(null);
-  const { mode, toggle } = useTheme() || {};
+  const [mobNav, setMobNav] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    try { return localStorage.getItem('si-nav') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('si-nav', navCollapsed ? '1' : '0'); } catch { /* ignore */ }
+  }, [navCollapsed]);
 
-  const showToast = (message, type = 'error') => {
-    setToast({ message, type });
-  };
+  const showToast = (message, type = 'error') => setToast({ message, type });
 
-  /* ================= hash routing (#class=<id>, #saved) ================ */
+  /* ================= hash routing (#class=, #subject=, #saved) ======= */
   const applyRoute = useCallback((h) => {
     setBmPop(null);
     setRoute(parseHash(h));
@@ -120,6 +132,18 @@ export default function PrincipalDashboard() {
     applyRoute(h);
   }, [applyRoute]);
 
+  /* sidebar nav → scroll to the level section (or switch view) */
+  const navGo = useCallback((key) => {
+    setMobNav(false);
+    if (key === 'saved') { go('saved'); return; }
+    if (view !== 'dash') { go(''); }
+    requestAnimationFrame(() => {
+      const el = document.getElementById(key);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      else mainRef.current?.scrollTo({ top: 0 });
+    });
+  }, [go, view]);
+
   /* ================= initial parallel load ================= */
   useEffect(() => {
     let alive = true;
@@ -131,7 +155,7 @@ export default function PrincipalDashboard() {
         fetchClasses('all'),
         fetchSchoolRank(),
         fetchAttendanceSeries(attRange),
-        fetchClassComparison(cmpMetric),
+        fetchClassComparison('avg'),
         fetchTeachers(),
       ]);
       if (!alive) return;
@@ -150,7 +174,7 @@ export default function PrincipalDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load only; range/metric changes have their own effects
   }, []);
 
-  /* refresh per tab / range change */
+  /* refresh per tab / range / metric change */
   const changeAttRange = (k) => {
     setAttRange(k);
     fetchAttendanceSeries(k)
@@ -159,7 +183,8 @@ export default function PrincipalDashboard() {
   };
   const changeCmpMetric = (m) => {
     setCmpMetric(m);
-    fetchClassComparison(m)
+    const fetcher = m === 'overall' ? fetchClassComparison('avg') : fetchClassComparisonBySubject(m);
+    fetcher
       .then((d) => setCmpClasses(d.classes || []))
       .catch(() => showToast('Class comparison unavailable', 'error'));
   };
@@ -170,12 +195,13 @@ export default function PrincipalDashboard() {
       .catch(() => showToast('Classes unavailable', 'error'));
   };
 
-  /* ================= students: server search + infinite scroll ========= */
+  /* ================= students: server search + rank bands + scroll ==== */
   const onQuery = (q) => { setQuery(q); setStLoading(true); };
+  const onMinAvg = (v) => { setMinAvg(v); setStLoading(true); };
   useEffect(() => {
     let alive = true;
     const t = setTimeout(() => {
-      fetchStudents({ search: query.trim(), page: 1, pageSize: PAGE_SIZE })
+      fetchStudents({ search: query.trim(), page: 1, pageSize: PAGE_SIZE, minAvg })
         .then((d) => {
           if (!alive) return;
           setStRows(d.students);
@@ -186,20 +212,20 @@ export default function PrincipalDashboard() {
         .finally(() => { if (alive) setStLoading(false); });
     }, 300);
     return () => { alive = false; clearTimeout(t); };
-  }, [query]);
+  }, [query, minAvg]);
 
   const loadMore = useCallback(() => {
     if (stLoading || stLoadingMore) return;
     if (stTotal != null && stRows.length >= stTotal) return;
     setStLoadingMore(true);
-    fetchStudents({ search: query.trim(), page: stPage + 1, pageSize: PAGE_SIZE })
+    fetchStudents({ search: query.trim(), page: stPage + 1, pageSize: PAGE_SIZE, minAvg })
       .then((d) => {
         setStRows((rows) => [...rows, ...d.students]);
         setStPage(d.page);
       })
       .catch(() => showToast('Could not load more students', 'error'))
       .finally(() => setStLoadingMore(false));
-  }, [stLoading, stLoadingMore, stTotal, stRows.length, stPage, query]);
+  }, [stLoading, stLoadingMore, stTotal, stRows.length, stPage, query, minAvg]);
 
   /* ================= folders ================= */
   const createFolder = (name) => {
@@ -241,6 +267,7 @@ export default function PrincipalDashboard() {
         setTeacherId(null);
         setShowCompare(false);
         setShowAperf(false);
+        setMobNav(false);
       }
     };
     document.addEventListener('keydown', onKey);
@@ -249,8 +276,7 @@ export default function PrincipalDashboard() {
 
   useEffect(() => { try { localStorage.setItem('fx-ai', aiCollapsed ? '1' : '0'); } catch { /* ignore */ } }, [aiCollapsed]);
 
-  /* close the bookmark popover on any outside click or scroll (document-level
-     capture so it also closes when a report modal behind it scrolls) */
+  /* close the bookmark popover on any outside click or scroll */
   useEffect(() => {
     if (!bmPop) return undefined;
     const close = (e) => {
@@ -274,16 +300,31 @@ export default function PrincipalDashboard() {
   const openReport = (student) => { setBmPop(null); setReportId(student.id); };
   const openTeacher = (t) => { setBmPop(null); setTeacherId(t.id); };
   const openClass = (id) => go(`class=${id}`);
+  const openSubject = (s) => {
+    setBmPop(null);
+    go(`subject=${s.id ?? s.name}`);
+  };
+  const signOut = () => { logout(); navigate('/'); };
 
   /* ================= render ================= */
   const booting = !stats && !statsErr;
   return (
-    <div className={`pd-root${aiCollapsed ? ' ai-collapsed' : ''}${aiOpenMobile ? ' ai-open' : ''}`}>
-      <div className="pd-main" ref={mainRef}>
-        {booting && <div className="pd-bootbar" role="progressbar" aria-label="Loading dashboard data" />}
+    <div className={`pd-root v15-root${navCollapsed ? ' nav-collapsed' : ''}${aiCollapsed ? ' ai-collapsed' : ''}${aiOpenMobile ? ' ai-open' : ''}${mobNav ? ' mob-nav' : ''}`}>
+      <LevelThemeStyle />
+      <DashSidebar
+        active={view === 'dash' ? 'schoolSec' : view}
+        onGo={navGo}
+        collapsed={navCollapsed}
+        onToggle={() => setNavCollapsed((c) => !c)}
+        savedCount={savedIds.size}
+        userName={user?.full_name}
+        onSignOut={signOut}
+      />
+
+      <main className="v15-main pd-main" ref={mainRef}>
         <header className="pagehead">
           <div>
-            <div className="eyebrow">School Intelligence</div>
+            <div className="eyebrow">Fetch-X</div>
             <h1>Principal Dashboard</h1>
             <div className="subtitle">{booting ? 'Crunching school data…' : 'School-wide academic and operational performance.'}</div>
           </div>
@@ -291,9 +332,11 @@ export default function PrincipalDashboard() {
             inputRef={gsRef}
             classesAll={classesAll || []}
             teachers={teachers || []}
+            subjects={termAvg?.subjects || []}
             onOpenClass={openClass}
             onOpenStudent={openReport}
             onOpenTeacher={openTeacher}
+            onOpenSubject={openSubject}
           />
           <div className="pagehead-actions">
             <button
@@ -322,9 +365,10 @@ export default function PrincipalDashboard() {
               stats={stats} statsErr={statsErr} termAvg={termAvg} distro={distro} rank={rank}
               attPoints={attPoints} attRange={attRange} onAttRange={changeAttRange}
               cmpClasses={cmpClasses} cmpMetric={cmpMetric} onCmpMetric={changeCmpMetric}
+              cmpSubjects={termAvg?.subjects || []}
               onOpenClass={openClass}
             />
-            <SectionSubjects termAvg={termAvg} />
+            <SectionSubjects termAvg={termAvg} onOpenSubject={openSubject} />
             <SectionClasses
               classesAll={classesAll}
               classes={classesList}
@@ -335,6 +379,8 @@ export default function PrincipalDashboard() {
             <SectionStudents
               query={query}
               onQuery={onQuery}
+              minAvg={minAvg}
+              onMinAvg={onMinAvg}
               rows={stRows}
               total={stTotal}
               loading={stLoading}
@@ -353,12 +399,23 @@ export default function PrincipalDashboard() {
           </div>
         )}
 
-        {view === 'class' && classId != null && (
+        {view === 'class' && route.id != null && (
           <ClassDetail
-            classId={classId}
+            classId={route.id}
             classesAll={classesAll || []}
             onBack={() => go('')}
             onOpenReport={openReport}
+            savedIds={savedIds}
+            onBookmark={onBookmark}
+          />
+        )}
+
+        {view === 'subject' && route.id != null && (
+          <SubjectDetail
+            subjectId={route.id}
+            onBack={() => go('')}
+            onOpenReport={openReport}
+            onOpenTeacher={openTeacher}
             savedIds={savedIds}
             onBookmark={onBookmark}
           />
@@ -375,15 +432,27 @@ export default function PrincipalDashboard() {
             savedCount={savedIds.size}
           />
         )}
-      </div>
+      </main>
+
+      {/* mobile bar (below sidebar in DOM so the drawer paints above) */}
+      <button
+        type="button" className="v15-mobtoggle" aria-label="Open navigation"
+        onClick={() => setMobNav(true)}
+      >
+        <Menu strokeWidth={2.2} />
+      </button>
+      {mobNav && (
+        <div className="v15-mobbackdrop" onClick={() => setMobNav(false)} role="presentation">
+          <div className="v15-mobclose"><X strokeWidth={2.4} /></div>
+        </div>
+      )}
 
       <AiPanel collapsed={aiCollapsed} onToggle={toggleAi} />
       <button type="button" className="ai-fab" onClick={toggleAi} aria-label="Open AI panel">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5c.7 5 3.3 7.6 8.3 8.3-5 .7-7.6 3.3-8.3 8.3-.7-5-3.3-7.6-8.3-8.3 5-.7 7.6-3.3 8.3-8.3z" /></svg>
       </button>
 
-      {/* bookmark-to-folder popover — portal to body so it paints ABOVE the
-          report modals (z100): .main-area traps it in a z-index:1 context. */}
+      {/* bookmark-to-folder popover */}
       {bmPop && createPortal(
         <div className="bm-pop open" style={{ left: bmPop.left, top: bmPop.top }} onMouseDown={(e) => e.stopPropagation()}>
           <div className="bmp-t">SAVE · {bmPop.student.name.toUpperCase()}</div>
@@ -429,9 +498,7 @@ export default function PrincipalDashboard() {
         document.body,
       )}
 
-      {/* Modals portal to document.body: .main-area creates a z-index:1
-          stacking context, so an in-page fixed backdrop (z100) would paint
-          UNDER the sidebar (z2) and its left controls would be covered. */}
+      {/* Modals portal to document.body */}
       {reportId != null && createPortal(
         <ReportCardModal
           studentId={reportId}

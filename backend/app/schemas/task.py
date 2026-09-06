@@ -10,6 +10,7 @@ class TaskCreate(BaseModel):
     due_date: Optional[date] = None
     class_id: int
     subject_id: int
+    term: Optional[int] = None  # v15: 1..3
 
     @field_validator("title")
     @classmethod

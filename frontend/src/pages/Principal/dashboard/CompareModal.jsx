@@ -1,28 +1,23 @@
-/* Compare modal (.cmp kit) — strictly A vs B over GRADE / CLASS / STUDENT /
-   FOLDER entities (school-scoped), 4 metric groups as paired bars with
-   winner highlight, delta chips and a lead summary.
-   All numbers are computed from data already fetched from the backend
-   (classes list, student reports, saved-folder reports). */
+/* Compare modal — designer v15: add up to 7 entities (SCHOOL / GRADE /
+   CLASS / STUDENT / FOLDER); each becomes a bar in every metric group
+   (MARKS / ATTENDANCE / TASK COMPLETION / OVERALL). Metrics come from the
+   NEW POST /principal/compare endpoint; folders carry their member ids
+   from localStorage. Winner highlight + "highest overall" note. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
-import { fetchStudentReport } from './data';
-import { Donut, useReveal } from './charts';
-import { mean, pct } from './util';
+import { compareEntities, fetchStudents } from './data';
+import { useReveal } from './charts';
+import { pct } from './util';
 
+const CMP_MAX = 7;
+const CMP_COLORS = ['#4f42dd', '#0c7a6b', '#b45f04', '#c2255c', '#0e7490', '#9333ea', '#d97706'];
 const TYPES = [
+  ['school', 'SCHOOL'],
   ['grade', 'GRADE'],
   ['class', 'CLASS'],
   ['student', 'STUDENT'],
   ['folder', 'FOLDER'],
 ];
-
-async function reportOf(id) {
-  try {
-    return await fetchStudentReport(id);
-  } catch {
-    return null;
-  }
-}
 
 export default function CompareModal({ onClose, classesAll = [], folders = [] }) {
   const reveal = useReveal();
@@ -30,239 +25,174 @@ export default function CompareModal({ onClose, classesAll = [], folders = [] })
     () => [...new Set(classesAll.map((c) => c.grade))].sort((a, b) => a - b),
     [classesAll],
   );
-  const [students, setStudents] = useState(null); // for the STUDENT selects
-  const [state, setState] = useState(() => ({
-    A: { type: 'grade', id: null },
-    B: { type: 'class', id: null },
-  }));
-  const [seeded, setSeeded] = useState(false);
-  const [ms, setMs] = useState({ A: '', B: '' });
-  const [metrics, setMetrics] = useState(null);
-  const [mKey, setMKey] = useState('');
+  const [type, setType] = useState('class');
+  const [ms, setMs] = useState('');
+  const [students, setStudents] = useState(null);
+  const [ents, setEnts] = useState([]); // [{key,type,id,name,color}]
+  const [metrics, setMetrics] = useState(null); // resolved [{...ents, marks, attendance, tasks, overall}]
   const closeRef = useRef(null);
+  const selRef = useRef(null);
 
-  /* busy is derived: true until metrics for the CURRENT selection have landed */
-  const stateKey = JSON.stringify([state.A, state.B, classesAll.length, folders.length]);
-  const busy = mKey !== stateKey;
+  useEffect(() => { closeRef.current?.focus(); }, []);
 
-  /* seed default ids once the classes list is known (render-phase adjust) */
-  if (!seeded && classesAll.length) {
-    setSeeded(true);
-    setState((s) => ({
-      A: { ...s.A, id: s.A.id ?? String(grades[grades.length - 1]) },
-      B: { ...s.B, id: s.B.id ?? String(classesAll[0].id) },
-    }));
-  }
-
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
-
-  /* students list for the STUDENT selects — debounced SERVER-side search.
-     The backend caps page_size at 200, so a static fetch can only ever see
-     a slice of the school; typing in the search box now queries the API
-     and reaches every student. Shared list for both sides (existing UX). */
-  const stuQ = (state.A.type === 'student' ? ms.A : '') || (state.B.type === 'student' ? ms.B : '');
+  /* students list for the STUDENT select (server-wide search) */
   useEffect(() => {
     let alive = true;
     const t = setTimeout(() => {
-      import('./data').then(({ fetchStudents }) =>
-        fetchStudents({ search: stuQ.trim(), page: 1, pageSize: stuQ.trim() ? 50 : 200 })
-          .then((d) => { if (alive) setStudents(d.students); })
-          .catch(() => { if (alive) setStudents([]); }),
-      );
+      fetchStudents({ search: ms.trim(), page: 1, pageSize: ms.trim() ? 50 : 200 })
+        .then((d) => { if (alive) setStudents(d.students); })
+        .catch(() => { if (alive) setStudents([]); });
     }, 250);
     return () => { alive = false; clearTimeout(t); };
-  }, [stuQ]);
+  }, [ms]);
 
-  /* resolve metrics whenever a side changes */
-  useEffect(() => {
-    let alive = true;
-    const key = JSON.stringify([state.A, state.B, classesAll.length, folders.length]);
-    const resolve = async ({ type, id }) => {
-      if (type === 'grade') {
-        const cs = classesAll.filter((c) => String(c.grade) === String(id));
-        if (!cs.length) return { name: `Grade ${id ?? '—'}`, sub: 'no classes', marks: 0, att: 0, tasks: 0 };
-        return {
-          name: `Grade ${id}`,
-          sub: `${cs.length} classes · ${cs.reduce((a, c) => a + (c.students || 0), 0)} students`,
-          marks: Math.round(mean(cs.map((c) => c.avg))),
-          att: Math.round(mean(cs.map((c) => c.attendance_pct))),
-          tasks: Math.round(mean(cs.map((c) => c.tasks_pct))),
-        };
-      }
-      if (type === 'class') {
-        const c = classesAll.find((x) => String(x.id) === String(id));
-        if (!c) return { name: 'Class —', sub: '—', marks: 0, att: 0, tasks: 0 };
-        return {
-          name: `Class ${c.name}`,
-          sub: `Grade ${c.grade} · ${c.students ?? '—'} students`,
-          marks: pct(c.avg), att: pct(c.attendance_pct), tasks: pct(c.tasks_pct),
-        };
-      }
-      if (type === 'student') {
-        const r = await reportOf(id);
-        if (!r) return { name: 'Student —', sub: 'unavailable', marks: 0, att: 0, tasks: 0 };
-        return {
-          name: r.student?.name || 'Student',
-          sub: `Class ${r.student?.class_name || '—'} · school rank #${r.ranks?.in_school ?? '—'}`,
-          marks: r.derived.marks, att: r.derived.attendance, tasks: r.derived.tasks,
-        };
-      }
-      /* folder */
-      const f = folders.find((x) => String(x.id) === String(id));
-      const ids = f?.studentIds || [];
-      if (!ids.length) return { name: f?.name || 'No folder', sub: 'empty folder — save students first', marks: 0, att: 0, tasks: 0 };
-      const reports = (await Promise.all(ids.map(reportOf))).filter(Boolean);
-      return {
-        name: f.name,
-        sub: `${reports.length} saved students · averaged`,
-        marks: Math.round(mean(reports.map((r) => r.derived.marks))),
-        att: Math.round(mean(reports.map((r) => r.derived.attendance))),
-        tasks: Math.round(mean(reports.map((r) => r.derived.tasks))),
-      };
-    };
-    Promise.all([resolve(state.A), resolve(state.B)]).then(([A, B]) => {
-      if (!alive) return;
-      setMetrics({ A, B });
-      setMKey(key);
-    });
-    return () => { alive = false; };
-  }, [state, classesAll, folders]);
-
-  const optionsFor = (side) => {
-    const { type } = state[side];
+  const options = useMemo(() => {
+    if (type === 'school') return [{ value: 'school', label: 'Entire School' }];
     if (type === 'grade') return grades.map((g) => ({ value: String(g), label: `Grade ${g}` }));
     if (type === 'class') return classesAll.map((c) => ({ value: String(c.id), label: `${c.name} — ${pct(c.avg)}%` }));
     if (type === 'folder') {
       return folders.length
         ? folders.map((f) => ({ value: String(f.id), label: `${f.name} — ${f.studentIds.length} saved` }))
-        : [{ value: '', label: 'No folders yet' }];
+        : [{ value: 'none', label: 'No folders yet' }];
     }
     return (students || []).map((s) => ({
       value: String(s.id),
       label: `${s.rank ? `#${s.rank} · ` : ''}${s.name} (${s.className})`,
     }));
+  }, [type, grades, classesAll, folders, students]);
+
+  /* keep the select valid when type/options change */
+  useEffect(() => {
+    const sel = selRef.current;
+    if (!sel) return;
+    const valid = [...sel.options].some((o) => o.value === sel.value);
+    if (!valid && sel.options.length) sel.value = sel.options[0].value;
+  }, [options]);
+
+  const ql = ms.trim().toLowerCase();
+
+  const addEntity = () => {
+    const sel = selRef.current;
+    if (!sel || ents.length >= CMP_MAX || !sel.value || sel.value === 'none') return;
+    const key = `${type}|${sel.value}`;
+    if (ents.some((e) => e.key === key)) return;
+    let name = sel.selectedOptions[0]?.label.split(' — ')[0] || sel.value;
+    if (type === 'school') name = 'Entire School';
+    if (type === 'student') name = (students || []).find((s) => String(s.id) === sel.value)?.name || name;
+    if (type === 'folder') name = folders.find((f) => String(f.id) === sel.value)?.name || name;
+    setEnts((p) => [...p, { key, type, id: sel.value, name, color: CMP_COLORS[p.length % CMP_COLORS.length] }]);
+    setMs('');
   };
 
-  const setSide = (side, patch) => setState((s) => ({ ...s, [side]: { ...s[side], ...patch } }));
-
-  const firstIdFor = (type) => {
-    if (type === 'grade') return grades.length ? String(grades[grades.length - 1]) : null;
-    if (type === 'class') return classesAll.length ? String(classesAll[0].id) : null;
-    if (type === 'folder') return folders.length ? String(folders[0].id) : '';
-    return students?.length ? String(students[0].id) : null;
+  const removeEntity = (i) => {
+    setEnts((p) => p.filter((_, k) => k !== i)
+      .map((e, k) => ({ ...e, color: CMP_COLORS[k % CMP_COLORS.length] })));
   };
 
-  const swap = () => setState((s) => ({ A: s.B, B: s.A }));
+  /* resolve metrics whenever the entity list changes */
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      if (!ents.length) { setMetrics([]); return; }
+    const payload = ents.map((e) => {
+      if (e.type === 'folder') {
+        const f = folders.find((x) => String(x.id) === e.id);
+        return { type: 'folder', id: e.id, name: e.name, student_ids: f?.studentIds || [] };
+      }
+      return { type: e.type, id: e.id };
+    });
+      await compareEntities(payload)
+        .then((d) => {
+          if (!alive) return;
+          setMetrics((d.entities || []).map((m, i) => ({ ...m, color: ents[i]?.color })));
+        })
+        .catch(() => { if (alive) setMetrics([]); });
+    };
+    run();
+    return () => { alive = false; };
+  }, [ents, folders]);
 
-  const ov = (M) => M.overall ?? Math.round((M.marks + M.att + M.tasks) / 3);
-  const fmtv = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
-
-  const groups = metrics
-    ? [
-        { cat: 'MARKS', a: metrics.A.marks, b: metrics.B.marks },
-        { cat: 'ATTENDANCE', a: metrics.A.att, b: metrics.B.att },
-        { cat: 'TASK COMPLETION', a: metrics.A.tasks, b: metrics.B.tasks },
-        { cat: 'OVERALL', a: ov(metrics.A), b: ov(metrics.B) },
-      ]
-    : [];
-
-  let aW = 0;
-  let bW = 0;
-  let tied = 0;
-  if (metrics) {
-    [[metrics.A.att, metrics.B.att], [metrics.A.marks, metrics.B.marks], [metrics.A.tasks, metrics.B.tasks]]
-      .forEach(([x, y]) => { if (x > y) aW++; else if (y > x) bW++; else tied++; });
-  }
-
-  const entitySide = (side) => {
-    const st = state[side];
-    const M = metrics?.[side];
-    const opts = optionsFor(side);
-    const q = ms[side].trim().toLowerCase();
-    return (
-      <div className="card cmp-entity">
-        <div className="cmp-ehead">
-          <span className={`cmp-badge ${side.toLowerCase()}`}>{side}</span>
-          <div className="info">
-            <div className="nm">{M ? M.name : '—'}</div>
-            <div className="sub">{M ? M.sub : '—'}</div>
-          </div>
-          <span className={side === 'A' ? 'lvlc-a' : 'lvlc-b'}>
-            {M ? <Donut value={ov(M)} variant="d-sm" /> : <span className="donut d-sm" />}
-          </span>
-        </div>
-        <div className="msearch">
-          <Search strokeWidth={2} />
-          <input
-            placeholder={st.type === 'student' ? 'Search all students by name — then pick below' : side === 'A' ? 'Search the list — e.g. “Ananya”' : 'Search the list — e.g. “10-Sapphire”'}
-            value={ms[side]}
-            onChange={(e) => setMs((m) => ({ ...m, [side]: e.target.value }))}
-          />
-        </div>
-        <div className="cmp-row">
-          <div className="seg">
-            {TYPES.map(([t, label]) => (
-              <button
-                key={t}
-                type="button"
-                className={`gtab${st.type === t ? ' active' : ''}`}
-                onClick={() => { setSide(side, { type: t, id: firstIdFor(t) }); setMs((m) => ({ ...m, [side]: '' })); }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <select
-            value={st.id ?? ''}
-            onChange={(e) => setSide(side, { id: e.target.value })}
-          >
-            {opts.map((o) => (
-              <option key={o.value} value={o.value} hidden={!!q && !o.label.toLowerCase().includes(q)}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        {st.type === 'student' && (
-          <div className="cmp-hint">
-            {students === null
-              ? 'LOADING STUDENTS…'
-              : `${students.length} ${students.length === 1 ? 'STUDENT' : 'STUDENTS'} LOADED${q ? ' · MATCHES — REFINING SEARCHES QUERIES THE WHOLE SCHOOL' : ' · TYPE ABOVE TO SEARCH EVERY STUDENT'}`}
-          </div>
-        )}
-      </div>
+  const cats = [
+    { cat: 'MARKS', k: 'marks' },
+    { cat: 'ATTENDANCE', k: 'attendance' },
+    { cat: 'TASK COMPLETION', k: 'tasks' },
+    { cat: 'OVERALL', k: 'overall' },
+  ];
+  const N = (metrics || []).length;
+  let note = 'ADD ENTITIES ABOVE TO COMPARE';
+  if (N === 1) note = null;
+  else if (N > 1) {
+    const best = [...metrics].sort((a, b) => b.overall - a.overall)[0];
+    note = (
+      <>HIGHEST OVERALL · <b style={{ color: best.color }}>{best.name}</b> ({Math.round(best.overall)}%)</>
     );
-  };
+  }
 
   return (
     <div className="modal-backdrop open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cmp">
         <div className="rep-head" style={{ marginBottom: 0 }}>
           <div>
-            <div className="eyebrow">SCHOOL INTELLIGENCE</div>
+            <div className="eyebrow">FETCH-X</div>
             <h2>Compare</h2>
-            <div className="subtitle">All-year attendance, marks &amp; task completion — side by side.</div>
+            <div className="subtitle">Add up to {CMP_MAX} entities — each becomes a bar in every metric group.</div>
           </div>
           <button ref={closeRef} type="button" className="btn-close" onClick={onClose} aria-label="Close">
             <X strokeWidth={2.4} />
           </button>
         </div>
 
-        <div className="cmp-entities">
-          {entitySide('A')}
-          <button type="button" className="btn-swap" onClick={swap} title="Swap A and B" aria-label="Swap A and B">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4v13M7 17l-3-3M7 17l3-3M17 20V7M17 7l-3 3M17 7l3 3" /></svg>
+        <div className="cmp-row" style={{ marginTop: 14 }}>
+          <div className="seg">
+            {TYPES.map(([t, label]) => (
+              <button
+                key={t} type="button"
+                className={`gtab${type === t ? ' active' : ''}`}
+                onClick={() => { setType(t); setMs(''); }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <select ref={selRef} defaultValue={options[0]?.value}>
+            {options.map((o) => (
+              <option key={o.value} value={o.value} hidden={!!ql && !o.label.toLowerCase().includes(ql)}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+          <div className="msearch">
+            <Search strokeWidth={2} />
+            <input
+              placeholder="Search the list — e.g. “Ananya”"
+              value={ms}
+              onChange={(e) => setMs(e.target.value)}
+            />
+          </div>
+          <button type="button" className="ct-btn solid" onClick={addEntity} disabled={ents.length >= CMP_MAX} style={{ opacity: ents.length >= CMP_MAX ? 0.5 : 1 }}>
+            + ADD ENTITY
           </button>
-          {entitySide('B')}
         </div>
 
-        <div className="card bigchart">
+        <div className="cmp-chips">
+          {ents.length
+            ? ents.map((e, i) => (
+              <button type="button" key={e.key} className="cmp-chip" style={{ background: e.color }}
+                title={`Remove ${e.name}`} onClick={() => removeEntity(i)}>
+                <b>{e.name}</b><span className="x">✕</span>
+              </button>
+            ))
+            : <span style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--muted)', padding: '4px 2px' }}>No entities yet — add at least one to compare.</span>}
+        </div>
+
+        <div className="card bigchart" style={{ marginTop: 14 }}>
           <div className="bc-top">
             <div className="bc-legend">
-              <span><span className="dot a" />A · {metrics?.A?.name || '—'}</span>
-              <span><span className="dot b" />B · {metrics?.B?.name || '—'}</span>
+              {(metrics || []).map((m) => (
+                <span key={m.key}><span className="dot" style={{ background: m.color }} />{m.name}</span>
+              ))}
             </div>
             <span className="bc-hint">ALL-YEAR AVERAGES · 0–100%</span>
           </div>
@@ -273,42 +203,36 @@ export default function CompareModal({ onClose, classesAll = [], folders = [] })
                 {[0, 25, 50, 75, 100].map((v) => <i key={v} style={{ top: `${v}%` }} />)}
               </div>
               <div className="bc-groups">
-                {busy && !metrics
-                  ? <div className="pd-note" style={{ margin: 'auto' }}>Computing…</div>
-                  : groups.map((g2) => {
-                      const d = Math.abs(g2.a - g2.b).toFixed(1);
-                      const win = g2.a === g2.b ? '' : g2.a > g2.b ? 'a' : 'b';
-                      return (
-                        <div className="bc-group" key={g2.cat}>
-                          <div className="bc-pair">
-                            <div className={`bc-bar a${win === 'a' ? ' win' : ''}`}>
-                              <span className="bc-val">{fmtv(g2.a)}%</span>
-                              <i className="bc-fill" style={{ height: reveal ? `${Math.min(100, g2.a)}%` : 0 }} />
+                {!N
+                  ? <div className="pd-note" style={{ margin: 'auto' }}>No entities to compare yet.</div>
+                  : cats.map((g) => {
+                    const max = Math.max(...metrics.map((m) => m[g.k] ?? 0));
+                    return (
+                      <div className="bc-group" key={g.cat}>
+                        <div className="bc-pair">
+                          {metrics.map((m) => (
+                            <div
+                              key={m.key}
+                              className={`bc-bar${m[g.k] === max && N > 1 ? ' win' : ''}`}
+                              title={`${m.name} · ${g.cat}: ${Math.round(m[g.k] ?? 0)}%`}
+                              style={{ flex: 1, maxWidth: 46, minWidth: 20 }}
+                            >
+                              <span className="bc-val">{Math.round(m[g.k] ?? 0)}%</span>
+                              <i
+                                className="bc-fill"
+                                style={{ background: m.color, height: reveal ? `${Math.min(100, m[g.k] ?? 0)}%` : 0 }}
+                              />
                             </div>
-                            <div className={`bc-bar b${win === 'b' ? ' win' : ''}`}>
-                              <span className="bc-val">{fmtv(g2.b)}%</span>
-                              <i className="bc-fill" style={{ height: reveal ? `${Math.min(100, g2.b)}%` : 0 }} />
-                            </div>
-                          </div>
-                          <div className="bc-cat">
-                            {g2.cat}
-                            {win
-                              ? <span className={`delta ${win}`}>▲ {win.toUpperCase()} +{d}</span>
-                              : <span className="delta">TIE</span>}
-                          </div>
+                          ))}
                         </div>
-                      );
-                    })}
+                        <div className="bc-cat">{g.cat}</div>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           </div>
-          <div className="cmp-note">
-            {metrics
-              ? (aW === 0 && bW === 0 && tied === 3
-                ? 'PERFECTLY TIED ACROSS ALL THREE METRICS'
-                : <><b>{metrics.A.name}</b> leads {aW} · <b>{metrics.B.name}</b> leads {bW}{tied ? ` · tied ${tied}` : ''}</>)
-              : '—'}
-          </div>
+          <div className="cmp-note" style={{ textAlign: 'left' }}>{note}</div>
         </div>
       </div>
     </div>

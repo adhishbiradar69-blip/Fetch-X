@@ -221,6 +221,7 @@ def _ensure_root_admin(db) -> None:
             hashed_password=get_password_hash(_pw),
             full_name="System Root", role="super_admin",
             school_id=None, assigned_class_id=None,
+            print(hashed_password)
         ))
         db.commit()
         if not os.environ.get("SCHOOLAI_ROOT_PASSWORD"):
@@ -476,6 +477,8 @@ def _seed_school(db, school: School, subjects: list[Subject], rng: random.Random
                 subject_id=subject_ids[(ci + ti) % len(subject_ids)],
                 title=TASK_TITLES[(ci * TASKS_PER_CLASS + ti) % len(TASK_TITLES)],
                 due_date=today - timedelta(days=(TASKS_PER_CLASS - 1 - ti) * 30),
+                # v15: spread seeded tasks over the three terms for the CT console
+                term=(ti % 3) + 1,
                 assigned_by=cls.class_teacher_id,
                 class_id=cls.id,
             ))

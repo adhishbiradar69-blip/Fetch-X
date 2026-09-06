@@ -8,6 +8,7 @@ import Landing from './pages/public/Landing';
 import About from './pages/public/About';
 import Terms from './pages/public/Terms';
 import Privacy from './pages/public/Privacy';
+import CTConsole from './pages/Teacher/CTConsole';
 import AttendanceBoard from './pages/Teacher/AttendanceBoard';
 import TaskManager from './pages/Teacher/TaskManager';
 import MarksBoard from './pages/Teacher/MarksBoard';
@@ -33,7 +34,7 @@ const LANDING_SPY = [
   { id: 'privacy', to: '/privacy' },
 ];
 
-function ProtectedRoute({ children, roles }) {
+function ProtectedRoute({ children, roles, bare = false }) {
   const { user, token } = useAuth();
   const location = useLocation();
   if (!token) return <Navigate to="/login" replace state={{ from: location }} />;
@@ -43,6 +44,9 @@ function ProtectedRoute({ children, roles }) {
   if (roles && !roles.includes(user.role)) {
     return <Navigate to={homePathFor(user.role)} replace />;
   }
+  // v15: the dashboard + CT console own their full chrome (sidebar included),
+  // so they render WITHOUT the app Layout shell.
+  if (bare) return children;
   return <Layout>{children}</Layout>;
 }
 
@@ -71,6 +75,22 @@ function LoginRoute() {
   return <Login />;
 }
 
+/* v15: the old teacher boards are folded into the Class Teacher console.
+   class_teacher users always land on the console; ADMIN roles (who may not
+   have a single CT class) keep the full board pages. */
+function TeacherRedirect({ attendance = false, tasks = false, marks = false }) {
+  const { user, token } = useAuth();
+  if (!token || !user) return <Navigate to="/login" replace />;
+  if (user.role === 'class_teacher') return <Navigate to="/teacher/console" replace />;
+  if (!['super_admin', 'school_admin', 'admin'].includes(user.role)) {
+    return <Navigate to={homePathFor(user.role)} replace />;
+  }
+  if (attendance) return <Layout><AttendanceBoard /></Layout>;
+  if (tasks) return <Layout><TaskManager /></Layout>;
+  if (marks) return <Layout><MarksBoard /></Layout>;
+  return <Layout><ClassReport /></Layout>;
+}
+
 function AnimatedRoutes() {
   const location = useLocation();
   // PERF/UX fix: the old code gated EVERY navigation behind an artificial
@@ -88,23 +108,25 @@ function AnimatedRoutes() {
       <Route path="/privacy" element={<PublicPage><Privacy /></PublicPage>} />
       <Route path="/login" element={<LoginRoute />} />
 
+      {/* v15 full-page consoles (own chrome — no Layout shell) */}
+      <Route path="/principal/dashboard" element={
+        <ProtectedRoute bare roles={['principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
+      <Route path="/teacher/console" element={
+        <ProtectedRoute bare roles={['class_teacher', ...A]}><CTConsole /></ProtectedRoute>} />
+      {/* v15 consolidation: the class teacher's old boards are folded into
+          the console — class teachers land there; admins keep the boards. */}
+      <Route path="/teacher/attendance" element={<TeacherRedirect attendance />} />
+      <Route path="/teacher/tasks" element={<TeacherRedirect tasks />} />
+      <Route path="/teacher/marks" element={<TeacherRedirect marks />} />
+      <Route path="/class-teacher/report" element={<TeacherRedirect />} />
+
       {/* Protected app pages — auth + role required */}
-      <Route path="/teacher/attendance" element={
-        <ProtectedRoute roles={['class_teacher', ...A]}><AttendanceBoard /></ProtectedRoute>} />
-      <Route path="/teacher/tasks" element={
-        <ProtectedRoute roles={['class_teacher', ...A]}><TaskManager /></ProtectedRoute>} />
-      <Route path="/teacher/marks" element={
-        <ProtectedRoute roles={['class_teacher', ...A]}><MarksBoard /></ProtectedRoute>} />
-      <Route path="/class-teacher/report" element={
-        <ProtectedRoute roles={['class_teacher', ...A]}><ClassReport /></ProtectedRoute>} />
       <Route path="/admin/dashboard" element={
         <ProtectedRoute roles={A}><AdminDashboard /></ProtectedRoute>} />
       <Route path="/admin/students" element={
         <ProtectedRoute roles={A}><AdminStudents /></ProtectedRoute>} />
       <Route path="/admin/accounts" element={
         <ProtectedRoute roles={A}><AccountCreation /></ProtectedRoute>} />
-      <Route path="/principal/dashboard" element={
-        <ProtectedRoute roles={['principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
       {/* v5 consolidation: the designer's principal section is ONE page —
           every former sub-page lives inside the dashboard (sections +
           modals). Old URLs land on the dashboard. */}

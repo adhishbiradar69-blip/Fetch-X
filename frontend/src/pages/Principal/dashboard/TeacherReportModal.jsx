@@ -31,7 +31,8 @@ function RepStat({ label, chips, all, C }) {
   );
 }
 
-export default function TeacherReportModal({ teacherId, onClose, onOpenClass, onBookmark, onOpenReport, totalClasses }) {
+/* fetcher: principal's report endpoint, or the CT console's self-report. */
+export default function TeacherReportModal({ teacherId, onClose, onOpenClass, onBookmark, onOpenReport, totalClasses, fetcher }) {
   const [rep, setRep] = useState(null);
   const [err, setErr] = useState(false);
   const [kidQ, setKidQ] = useState('');
@@ -47,7 +48,7 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
       setKidQ('');
       if (teacherId == null) return;
       try {
-        const r = await fetchTeacherReport(teacherId);
+        const r = await (fetcher || fetchTeacherReport)(teacherId);
         if (alive) setRep(r);
       } catch {
         if (alive) setErr(true);
@@ -55,6 +56,7 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
     };
     run();
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetcher is a stable per-caller identity
   }, [teacherId]);
 
   useEffect(() => { closeRef.current?.focus(); }, [rep]);

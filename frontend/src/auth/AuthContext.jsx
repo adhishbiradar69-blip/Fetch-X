@@ -9,12 +9,14 @@ const ROLE_HOME = {
   principal: '/principal/dashboard',
   chairperson: '/chairperson/dashboard',
   parent: '/parent/view',
-  class_teacher: '/teacher/attendance',
+  /* v15: class teachers get the designed console (attendance, tasks, marks,
+     teaching classes, my report, timetable) inside the dashboard shell */
+  class_teacher: '/teacher/console',
   admin: '/admin/dashboard', // legacy fallback
 };
 
 export function homePathFor(role) {
-  return ROLE_HOME[role] || '/teacher/attendance';
+  return ROLE_HOME[role] || '/teacher/console';
 }
 
 export function isAdmin(role) {

@@ -37,12 +37,17 @@ export const fetchClasses = (grade = 'all') =>
 /* GET /principal/class-detail/{id} */
 export const fetchClassDetail = (id) => get(`/principal/class-detail/${id}`);
 
-/* GET /principal/students?search=&page=&page_size=
+/* GET /principal/students?search=&page=&page_size=&min_avg=
    → { students:[{id,name,class_id,class_name,avg,trend,attendance_pct,
         rank_in_school}], total, page, page_size } */
-export async function fetchStudents({ search = '', page = 1, pageSize = 30 } = {}) {
+export async function fetchStudents({ search = '', page = 1, pageSize = 30, minAvg = 0 } = {}) {
   const data = await get('/principal/students', {
-    params: { search: search || undefined, page, page_size: pageSize },
+    params: {
+      search: search || undefined,
+      page,
+      page_size: pageSize,
+      min_avg: minAvg || undefined,
+    },
   });
   const rows = (data.students || []).map((s) => ({
     id: s.id,
@@ -115,3 +120,48 @@ export const fetchTeacherReport = (id) => get(`/principal/teacher-report/${id}`)
 /* POST /principal/ai/analyze → { answer, source, tools_used } */
 export const analyze = (question) =>
   api.post('/principal/ai/analyze', { question }).then((r) => r.data);
+
+/* ───────────────────────── v15 designer update ───────────────────────── */
+
+/* GET /principal/subject-detail/{id} — subject page (v15) */
+export const fetchSubjectDetail = (id) => get(`/principal/subject-detail/${id}`);
+
+/* GET /principal/class-comparison?metric=avg&subject=<id|name> */
+export const fetchClassComparisonBySubject = (subject) =>
+  get('/principal/class-comparison', { params: { metric: 'avg', subject } });
+
+/* GET /principal/students?min_avg= — rank-band filter (v15 tabs) */
+export async function fetchStudentsFiltered({ search = '', page = 1, pageSize = 30, minAvg = 0 } = {}) {
+  return fetchStudents({ search, page, pageSize, minAvg });
+}
+
+/* POST /principal/compare — multi-entity compare (v15, up to 7) */
+export const compareEntities = (entities) =>
+  api.post('/principal/compare', { entities }).then((r) => r.data);
+
+/* GET /timetable/class/{id} — weekly class grid (NEW backend) */
+export const fetchClassTimetable = (classId) => get(`/timetable/class/${classId}`);
+
+/* GET /timetable/teacher/{id} — personal teacher grid (NEW backend) */
+export const fetchTeacherTimetable = (teacherId) => get(`/timetable/teacher/${teacherId}`);
+
+/* GET /attendance/series with scope — class / student attendance trend.
+   The v15 class-detail + report cards use scoped series. */
+export const fetchAttendanceSeriesScoped = ({ scope = 'school', id, days = 365 }) =>
+  get('/principal/attendance/series', { params: { scope, id, days } });
+
+/* ───────────── Class Teacher console (NEW /ct backend) ───────────── */
+
+/* GET /ct/me → { teacher, class } */
+export const fetchCtMe = () => get('/ct/me');
+
+/* GET /ct/class-dashboard → same contract as /principal/class-detail */
+export const fetchCtClassDashboard = (classId) =>
+  get('/ct/class-dashboard', { params: classId ? { class_id: classId } : {} });
+
+/* GET /ct/teaching-classes → { teacher, role, ct_class, classes } */
+export const fetchCtTeachingClasses = () => get('/ct/teaching-classes');
+
+/* GET /ct/teacher-report → same contract as /principal/teacher-report/{id},
+   scoped to the console user (v15 CT console "My Report"). */
+export const fetchCtTeacherReport = () => get('/ct/teacher-report');

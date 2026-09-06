@@ -32,7 +32,7 @@ def create_task(data: TaskCreate, db: Session = Depends(get_db), user=Depends(_w
     if not subject:
         raise HTTPException(status_code=400, detail="Subject not found")
     task = Task(title=data.title.strip(), due_date=data.due_date, class_id=data.class_id,
-                subject_id=data.subject_id, assigned_by=user.id)
+                subject_id=data.subject_id, term=data.term, assigned_by=user.id)
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -69,6 +69,7 @@ def get_class_tasks(class_id: int, db: Session = Depends(get_db), user=Depends(g
             "task_id": task.id,
             "title": task.title,
             "due_date": str(task.due_date) if task.due_date else None,
+            "term": task.term or 1,
             "subject": {"id": subject.id, "name": subject.name, "color": subject.color}
                        if subject else {"id": 0, "name": "General", "color": "#64748b"},
             "students": students_data,
