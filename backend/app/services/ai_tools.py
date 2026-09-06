@@ -670,3 +670,558 @@ CHAIRPERSON_TOOLS: dict[str, dict] = {
         "function": get_subject_leadership,
     },
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v2 toolset — class drill-downs, rosters, comparisons, charts
+# ─────────────────────────────────────────────────────────────────────────────
+def _chart(spec: dict) -> str:
+    """Wrap a chart payload in the fenced block the frontend renders."""
+    import json as _json
+    return "```chart\n" + _json.dumps(spec, ensure_ascii=False) + "\n```"
+
+
+def _class_rows_by_label(data: dict) -> dict[str, dict]:
+    return {c["label"].lower(): c for c in data["_class_rows"]}
+
+
+def _find_class_row(data: dict, label: str) -> Optional[dict]:
+    if not label:
+        return None
+    q = label.strip().lower()
+    rows = _class_rows_by_label(data)
+    if q in rows:
+        return rows[q]
+    for k, row in rows.items():
+        if q in k:
+            return row
+    return None
+
+
+def get_class_detail(db: Session, school: School, label: str,
+                     _data: dict | None = None) -> str:
+    """Full drill-down for one class (label like '9-Emerald'): averages,
+    attendance, subject breakdown, top performers, at-risk students."""
+    if not label:
+        return "Error: 'label' is required (e.g. '9-Emerald')."
+    data = _school_data(db, school, _data)
+    row = _find_class_row(data, label)
+    if not row:
+        avail = ", ".join(sorted(_class_rows_by_label(data).keys())[:12])
+        return (f"No class matching '{label}' at {school.name}. "
+                f"Examples: {avail} …")
+    lines = [
+        f"Class {row['label']} at {school.name}:",
+        f"- {row['students']} students · class average {row['average']}% · "
+        f"attendance {row['attendance_rate']}% · at-risk {row['at_risk_count']}",
+    ]
+    strong = row.get("strongest_subject") or {}
+    weak = row.get("weakest_subject") or {}
+    if strong:
+        lines.append(f"- Strongest subject: {strong.get('name')} ({strong.get('average')}%) · "
+                     f"weakest: {weak.get('name')} ({weak.get('average')}%)")
+    sa = row.get("subject_averages") or []
+    if sa:
+        sub_by_id = data["_subject_by_id"]
+        lines.append("- Subject averages:")
+        for s in sorted(sa, key=lambda x: -(x["average"] or 0)):
+            sub = sub_by_id.get(s["subject_id"])
+            lines.append(f"  · {sub.name if sub else '?'}: {s['average']}%")
+    # top 5 + at-risk names from the student stats
+    mates = [st for st in data["_student_stats"].values()
+             if st.get("class_label") == row["label"]]
+    mates.sort(key=lambda x: x["average"], reverse=True)
+    if mates:
+        lines.append("- Top students: " + "; ".join(
+            f"{m['name']} ({m['average']}%)" for m in mates[:5]))
+    risky = [m for m in mates if m["average"] < 50 or m["attendance_rate"] < 60]
+    if risky:
+        lines.append("- At-risk: " + "; ".join(
+            f"{m['name']} (avg {m['average']}%, att {m['attendance_rate']}%)"
+            for m in risky[:8]))
+    return "\n".join(lines)
+
+
+def get_class_roster(db: Session, school: School, label: str, limit: int = 15,
+                     _data: dict | None = None) -> str:
+    """Ranked roster (best → worst) for one class with averages + attendance."""
+    try:
+        limit = max(1, min(int(limit), 40))
+    except (TypeError, ValueError):
+        limit = 15
+    data = _school_data(db, school, _data)
+    row = _find_class_row(data, label)
+    if not row:
+        return f"No class matching '{label}' at {school.name}."
+    mates = [st for st in data["_student_stats"].values()
+             if st.get("class_label") == row["label"]]
+    mates.sort(key=lambda x: x["average"], reverse=True)
+    lines = [f"Roster of {row['label']} ({len(mates)} students, ranked):"]
+    for m in mates[:limit]:
+        lines.append(f"- {m['name']} — avg {m['average']}% · att {m['attendance_rate']}% "
+                     f"(rank {m.get('rank_in_class')}/{m.get('class_size')})")
+    if len(mates) > limit:
+        lines.append(f"… and {len(mates) - limit} more.")
+    return "\n".join(lines)
+
+
+def get_class_at_risk(db: Session, school: School, label: str, limit: int = 10,
+                      _data: dict | None = None) -> str:
+    """At-risk students inside one class with reasons."""
+    try:
+        limit = max(1, min(int(limit), 30))
+    except (TypeError, ValueError):
+        limit = 10
+    data = _school_data(db, school, _data)
+    row = _find_class_row(data, label)
+    if not row:
+        return f"No class matching '{label}' at {school.name}."
+    mates = [st for st in data["_student_stats"].values()
+             if st.get("class_label") == row["label"]
+             and (st["average"] < 50 or st["attendance_rate"] < 60)]
+    mates.sort(key=lambda x: x["average"])
+    if not mates:
+        return f"No at-risk students in {row['label']} 🎉"
+    lines = [f"At-risk students in {row['label']}: ({len(mates)})"]
+    for m in mates[:limit]:
+        weak = m.get("weakest_subject") or {}
+        lines.append(f"- {m['name']} — avg {m['average']}% · att {m['attendance_rate']}% · "
+                     f"weakest {weak.get('name', '?')} ({weak.get('average', '?')}%)")
+    return "\n".join(lines)
+
+
+def get_students_by_band(db: Session, school: School, min_avg: int = 80,
+                         max_avg: int = 100, limit: int = 15,
+                         _data: dict | None = None) -> str:
+    """Students whose all-term average falls in [min_avg, max_avg]."""
+    try:
+        lo, hi = int(min_avg), int(max_avg)
+    except (TypeError, ValueError):
+        lo, hi = 80, 100
+    try:
+        limit = max(1, min(int(limit), 40))
+    except (TypeError, ValueError):
+        limit = 15
+    data = _school_data(db, school, _data)
+    picked = [st for st in data["_student_stats"].values() if lo <= st["average"] <= hi]
+    picked.sort(key=lambda x: x["average"], reverse=True)
+    if not picked:
+        return f"No students with average between {lo}% and {hi}% at {school.name}."
+    lines = [f"{len(picked)} students average {lo}–{hi}% at {school.name} (top {min(limit, len(picked))}):"]
+    for m in picked[:limit]:
+        lines.append(f"- {m['name']} ({m['class_label']}) — {m['average']}% · "
+                     f"att {m['attendance_rate']}%")
+    return "\n".join(lines)
+
+
+def compare_students(db: Session, school: School, names: str,
+                     _data: dict | None = None) -> str:
+    """Side-by-side comparison of 2–3 students (comma-separated names):
+    averages, ranks, attendance, best/worst subjects, improvement."""
+    if not names:
+        return "Error: 'names' is required — comma-separated, e.g. 'Ananya, Ira Reddy'."
+    data = _school_data(db, school, _data)
+    stats = data["_student_stats"]
+    picked = []
+    for part in str(names).split(","):
+        q = part.strip()
+        if not q:
+            continue
+        match = next((st for st in stats.values()
+                      if st["name"].lower() == q.lower()), None)
+        if match is None:
+            match = next((st for st in stats.values()
+                          if q.lower() in st["name"].lower()), None)
+        if match:
+            picked.append(match)
+    if len(picked) < 2:
+        return ("Need at least 2 matching students. Found: "
+                + (", ".join(p["name"] for p in picked) or "none")
+                + ". Use get_student_details for fuzzy single lookups.")
+    lines = [f"Comparing {len(picked)} students:"]
+    keys = [("Average", lambda s: f"{s['average']}%"),
+            ("Class", lambda s: s["class_label"]),
+            ("Rank in class", lambda s: f"{s.get('rank_in_class')}/{s.get('class_size')}"),
+            ("Attendance", lambda s: f"{s['attendance_rate']}%"),
+            ("Strongest", lambda s: f"{(s.get('strongest_subject') or {}).get('name', '?')} "
+                                    f"({(s.get('strongest_subject') or {}).get('average', '?')}%)"),
+            ("Weakest", lambda s: f"{(s.get('weakest_subject') or {}).get('name', '?')} "
+                                  f"({(s.get('weakest_subject') or {}).get('average', '?')}%)"),
+            ("Trend", lambda s: (f"{s['first_exam_average']}% → {s['last_exam_average']}% "
+                                 f"({s['improvement_delta']:+}%)"
+                                 if s.get("improvement_delta") is not None else "n/a"))]
+    for label, fn in keys:
+        lines.append(f"- {label}: " + " | ".join(f"{p['name']}: {fn(p)}" for p in picked))
+    best = max(picked, key=lambda s: s["average"])
+    lines.append(f"Overall strongest: {best['name']} ({best['average']}%).")
+    return "\n".join(lines)
+
+
+def get_teacher_report(db: Session, school: School, teacher_name: str,
+                       _data: dict | None = None) -> str:
+    """One teacher's teaching load: classes + subjects handled, and each
+    class's average. Timetable-only extra teachers are NOT included."""
+    if not teacher_name:
+        return "Error: 'teacher_name' is required."
+    from app.models.teacher_assignment import TeacherAssignment
+    from app.models.user import User as _User
+    data = _school_data(db, school, _data)
+    q = teacher_name.strip().lower()
+    matches = (db.query(_User)
+                 .filter(_User.school_id == school.id,
+                         _User.role == "class_teacher",
+                         _User.full_name.ilike(f"%{q}%"))
+                 .all())
+    if not matches:
+        return f"No teacher matching '{teacher_name}' at {school.name}."
+    class_objs = {c.id: c for c in data["_classes"]}
+    sub_by_id = data["_subject_by_id"]
+    lines = [f"Teaching report for '{teacher_name}' at {school.name}:"]
+    for u in matches[:3]:
+        assigns = (db.query(TeacherAssignment)
+                     .filter(TeacherAssignment.school_id == school.id,
+                             TeacherAssignment.teacher_user_id == u.id)
+                     .all())
+        teaching, hods = [], []
+        for a in assigns:
+            sub = sub_by_id.get(a.subject_id)
+            if a.class_id is not None and not a.is_hod and sub:
+                cls = class_objs.get(a.class_id)
+                if cls:
+                    crow = _find_class_row(data, f"{cls.grade}-{cls.section}")
+                    avg = crow["average"] if crow else "?"
+                    teaching.append(f"{cls.grade}-{cls.section} — {sub.name} "
+                                    f"(class avg {avg}%)")
+            elif a.is_hod and a.class_id is None and sub:
+                hods.append(sub.name)
+        if not teaching and not hods:
+            lines.append(f"- {u.full_name}: no teaching assignments recorded.")
+            continue
+        lines.append(f"- {u.full_name}:")
+        lines.extend(f"  · {t}" for t in teaching)
+        if hods:
+            lines.append(f"  · HOD of: {', '.join(hods)}")
+    return "\n".join(lines)
+
+
+def get_attendance_summary(db: Session, school: School,
+                           _data: dict | None = None) -> str:
+    """School attendance overview: overall rate, best/worst classes,
+    chronic absentees count."""
+    data = _school_data(db, school, _data)
+    stats = list(data["_student_stats"].values())
+    if not stats:
+        return f"No attendance data at {school.name}."
+    overall = round(sum(s["attendance_rate"] for s in stats) / len(stats), 1)
+    by_class: dict[str, list[float]] = {}
+    for s in stats:
+        by_class.setdefault(s["class_label"], []).append(s["attendance_rate"])
+    class_avg = sorted(((k, round(sum(v) / len(v), 1)) for k, v in by_class.items()),
+                       key=lambda x: x[1])
+    chronic = [s for s in stats if s["attendance_rate"] < 60]
+    lines = [
+        f"Attendance overview at {school.name}:",
+        f"- School-wide average: {overall}%",
+        f"- Chronic absentees (<60%): {len(chronic)} students",
+    ]
+    if class_avg:
+        worst = class_avg[:3]
+        best = class_avg[-3:][::-1]
+        lines.append("- Lowest-attendance classes: "
+                     + ", ".join(f"{k} ({v}%)" for k, v in worst))
+        lines.append("- Best-attendance classes: "
+                     + ", ".join(f"{k} ({v}%)" for k, v in best))
+    return "\n".join(lines)
+
+
+def get_task_completion_stats(db: Session, school: School,
+                              _data: dict | None = None) -> str:
+    """Task-completion percentage per class — completed / (completed +
+    pending), the exact same semantics as /principal/tasks/stats."""
+    from app.models.task import Task, TaskCompletion
+    data = _school_data(db, school, _data)
+    class_objs = data["_classes"]
+    if not class_objs:
+        return f"No classes at {school.name}."
+    rows = (db.query(TaskCompletion.status, Task.class_id)
+              .join(Task, TaskCompletion.task_id == Task.id)
+              .join(Class, Task.class_id == Class.id)
+              .filter(Class.school_id == school.id)
+              .all())
+    if not rows:
+        return f"No tasks recorded at {school.name}."
+    acc: dict[int, dict[str, int]] = {}
+    for status, cid in rows:
+        b = acc.setdefault(cid, {"completed": 0, "pending": 0})
+        if status == "completed":
+            b["completed"] += 1
+        else:
+            b["pending"] += 1
+    out = []
+    name_of = {c.id: f"{c.grade}-{c.section}" for c in class_objs}
+    for cid, b in acc.items():
+        total = b["completed"] + b["pending"]
+        if total:
+            out.append((name_of.get(cid, f"#{cid}"),
+                        round(b["completed"] / total * 100, 1)))
+    if not out:
+        return f"No task data recorded at {school.name}."
+    out.sort(key=lambda x: x[1])
+    lines = [f"Task completion at {school.name} (low → high):"]
+    lines.extend(f"- {label}: {pct}%" for label, pct in out)
+    return "\n".join(lines)
+
+
+def get_grade_summary(db: Session, school: School, grade: int,
+                      _data: dict | None = None) -> str:
+    """One grade's roll-up: average, attendance, per-subject averages, top."""
+    try:
+        grade = int(grade)
+    except (TypeError, ValueError):
+        return f"Error: 'grade' must be an integer (got {grade!r})."
+    data = _school_data(db, school, _data)
+    grow = next((g for g in data["grades"] if g["grade"] == grade), None)
+    if not grow:
+        return f"No data for grade {grade} at {school.name}."
+    sub_by_id = data["_subject_by_id"]
+    lines = [
+        f"Grade {grade} at {school.name}: {grow['students']} students · "
+        f"{grow['classes']} sections · avg {grow['average']}% · "
+        f"attendance {grow['attendance_rate']}%",
+    ]
+    sa = sorted(grow.get("subject_averages") or [],
+                key=lambda x: -(x["average"] or 0))
+    if sa:
+        lines.append("- Subject averages: " + ", ".join(
+            f"{(sub_by_id.get(s['subject_id']).name if sub_by_id.get(s['subject_id']) else '?')}: "
+            f"{s['average']}%" for s in sa))
+    mates = [st for st in data["_student_stats"].values() if st["grade"] == grade]
+    if mates:
+        top = max(mates, key=lambda x: x["average"])
+        lines.append(f"- Top student: {top['name']} ({top['average']}%, {top['class_label']})")
+        risky = sum(1 for m in mates if m["average"] < 50 or m["attendance_rate"] < 60)
+        lines.append(f"- At-risk: {risky} of {len(mates)} students")
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# chart tools — return ready-to-render ```chart payloads
+# ─────────────────────────────────────────────────────────────────────────────
+def visualize_subject_averages(db: Session, school: School,
+                               _data: dict | None = None) -> str:
+    """Bar chart of every subject's school-wide average."""
+    data = _school_data(db, school, _data)
+    items = [{"label": s["name"], "val": s["average"]}
+             for s in sorted(data["subjects"], key=lambda x: -x["average"])]
+    if not items:
+        return f"No subject data at {school.name}."
+    return _chart({"type": "bar", "title": f"Subject averages — {school.name}",
+                   "items": items})
+
+
+def visualize_score_distribution(db: Session, school: School,
+                                 _data: dict | None = None) -> str:
+    """Distribution of students across score bands."""
+    data = _school_data(db, school, _data)
+    bands = {"<60": 0, "60-69": 0, "70-79": 0, "80-89": 0, "90-100": 0}
+    for st in data["_student_stats"].values():
+        a = st["average"]
+        if a < 60:
+            bands["<60"] += 1
+        elif a < 70:
+            bands["60-69"] += 1
+        elif a < 80:
+            bands["70-79"] += 1
+        elif a < 90:
+            bands["80-89"] += 1
+        else:
+            bands["90-100"] += 1
+    total = sum(bands.values())
+    return _chart({"type": "distro", "title": f"Score distribution — {school.name}",
+                   "bands": [{"band": b, "count": n} for b, n in bands.items()],
+                   "total": total})
+
+
+def visualize_term_trends(db: Session, school: School, grade: Optional[int] = None) -> str:
+    """Bar chart of average score per term (whole school or one grade)."""
+    from sqlalchemy import case as sa_case
+    from app.models.class_ import Class as _Cls
+    q = (db.query(Exam.term,
+                  func_avg_mark())
+           .join(Mark, Mark.exam_id == Exam.id)
+           .join(Student, Mark.student_id == Student.id)
+           .join(_Cls, Student.class_id == _Cls.id)
+           .filter(_Cls.school_id == school.id))
+    if grade is not None:
+        try:
+            q = q.filter(_Cls.grade == int(grade))
+        except (TypeError, ValueError):
+            pass
+    rows = q.group_by(Exam.term).all()
+    if not rows:
+        return f"No exam data at {school.name}."
+    order = {"Term 1": 1, "Term 2": 2, "Term 3": 3}
+    items = [{"label": r[0] or "?", "val": round(float(r[1] or 0), 1)} for r in rows]
+    items.sort(key=lambda x: order.get(x["label"], 9))
+    title = f"Term averages — {'grade ' + str(grade) if grade else school.name}"
+    return _chart({"type": "bar", "title": title, "items": items})
+
+
+def func_avg_mark():
+    from sqlalchemy import func
+    return func.avg(Mark.score)
+
+
+def visualize_class_comparison(db: Session, school: School, grade: int,
+                               _data: dict | None = None) -> str:
+    """Bar chart comparing every section of one grade."""
+    try:
+        grade = int(grade)
+    except (TypeError, ValueError):
+        return f"Error: 'grade' must be an integer (got {grade!r})."
+    data = _school_data(db, school, _data)
+    rows = sorted((c for c in data["_class_rows"] if c["grade"] == grade),
+                  key=lambda c: c["section"])
+    if not rows:
+        return f"No classes in grade {grade} at {school.name}."
+    items = [{"label": c["label"], "val": c["average"]} for c in rows]
+    return _chart({"type": "bar",
+                   "title": f"Class comparison — Grade {grade}, {school.name}",
+                   "items": items})
+
+
+def visualize_attendance_trend(db: Session, school: School, days: int = 90) -> str:
+    """Line chart of the school's daily attendance rate."""
+    from datetime import date, timedelta
+    from sqlalchemy import case as sa_case
+    from app.models.class_ import Class as _Cls
+    try:
+        days = max(14, min(int(days), 180))
+    except (TypeError, ValueError):
+        days = 90
+    start = date.today() - timedelta(days=days - 1)
+    rows = (db.query(Attendance.date,
+                     func_count_att(),
+                     func_present())
+              .join(Student, Attendance.student_id == Student.id)
+              .join(_Cls, Student.class_id == _Cls.id)
+              .filter(_Cls.school_id == school.id,
+                      Attendance.date >= start)
+              .group_by(Attendance.date)
+              .order_by(Attendance.date)
+              .all())
+    if not rows:
+        return f"No attendance records in the last {days} days at {school.name}."
+    points = [{"date": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+               "pct": round((r[2] or 0) / r[1] * 100, 1)}
+              for r in rows]
+    return _chart({"type": "line",
+                   "title": f"Attendance trend (last {days} days) — {school.name}",
+                   "points": points})
+
+
+def func_count_att():
+    from sqlalchemy import func
+    return func.count(Attendance.id)
+
+
+def func_present():
+    from sqlalchemy import case
+    return func.sum(case((Attendance.status == "P", 1), else_=0))
+
+
+# Register the v2 tools on the principal registry.
+TOOLS.update({
+    "get_class_detail": {
+        "description": ("Full drill-down for ONE class (label like '9-Emerald'): size, "
+                        "average, attendance, subject-by-subject averages, top students, "
+                        "at-risk students."),
+        "params": {"label": "string (required) — class label, e.g. '9-Emerald'"},
+        "function": get_class_detail,
+    },
+    "get_class_roster": {
+        "description": ("Ranked roster of one class (best → worst) with averages and "
+                        "attendance. Use after get_class_detail when the user asks 'who "
+                        "is in…' or 'list the students of…'."),
+        "params": {"label": "string (required) — class label",
+                   "limit": "integer (optional, default 15)"},
+        "function": get_class_roster,
+    },
+    "get_class_at_risk": {
+        "description": ("At-risk students inside ONE class with averages, attendance "
+                        "and weakest subjects."),
+        "params": {"label": "string (required) — class label",
+                   "limit": "integer (optional, default 10)"},
+        "function": get_class_at_risk,
+    },
+    "get_students_by_band": {
+        "description": ("Students whose all-term average falls inside a score band, "
+                        "e.g. 80–100 for toppers in a range or 35–50 for strugglers."),
+        "params": {"min_avg": "integer (optional, default 80)",
+                   "max_avg": "integer (optional, default 100)",
+                   "limit": "integer (optional, default 15)"},
+        "function": get_students_by_band,
+    },
+    "compare_students": {
+        "description": ("Side-by-side comparison of 2–3 students (comma-separated): "
+                        "averages, ranks, attendance, strongest/weakest subjects, trend."),
+        "params": {"names": "string (required) — e.g. 'Ananya, Ira Reddy'"},
+        "function": compare_students,
+    },
+    "get_teacher_report": {
+        "description": ("One teacher's load: classes + subjects taught and each class's "
+                        "average; also shows HOD roles. Does NOT include timetable-only "
+                        "subject teachers."),
+        "params": {"teacher_name": "string (required) — part or all of the name"},
+        "function": get_teacher_report,
+    },
+    "get_attendance_summary": {
+        "description": ("School attendance overview: overall rate, chronic absentees, "
+                        "lowest- and best-attendance classes."),
+        "params": {},
+        "function": get_attendance_summary,
+    },
+    "get_task_completion_stats": {
+        "description": ("Average task-completion percentage per class, lowest first. "
+                        "Use for homework/task questions."),
+        "params": {},
+        "function": get_task_completion_stats,
+    },
+    "get_grade_summary": {
+        "description": ("One grade's roll-up: students, sections, average, attendance, "
+                        "per-subject averages, top student, at-risk count."),
+        "params": {"grade": "integer (required)"},
+        "function": get_grade_summary,
+    },
+    "visualize_subject_averages": {
+        "description": ("Returns a bar CHART of every subject's school-wide average. "
+                        "Copy the returned ```chart block verbatim into your answer."),
+        "params": {},
+        "function": visualize_subject_averages,
+    },
+    "visualize_score_distribution": {
+        "description": ("Returns a CHART of how many students fall in each score band "
+                        "(<60, 60s, 70s, 80s, 90+). Copy the ```chart block verbatim."),
+        "params": {},
+        "function": visualize_score_distribution,
+    },
+    "visualize_term_trends": {
+        "description": ("Returns a bar CHART of average score per term (school-wide or "
+                        "for one grade) — perfect for 'are we improving term over term?'. "
+                        "Copy the ```chart block verbatim."),
+        "params": {"grade": "integer (optional) — restrict to one grade"},
+        "function": visualize_term_trends,
+    },
+    "visualize_class_comparison": {
+        "description": ("Returns a bar CHART comparing every section of one grade by "
+                        "average. Copy the ```chart block verbatim."),
+        "params": {"grade": "integer (required)"},
+        "function": visualize_class_comparison,
+    },
+    "visualize_attendance_trend": {
+        "description": ("Returns a line CHART of the school's daily attendance rate for "
+                        "the last N days (default 90). Copy the ```chart block verbatim."),
+        "params": {"days": "integer (optional, default 90)"},
+        "function": visualize_attendance_trend,
+    },
+})

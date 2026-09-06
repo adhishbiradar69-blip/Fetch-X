@@ -33,8 +33,11 @@ from sqlalchemy.orm import Session
 # ─────────────────────────────────────────────────────────────────────────────
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_PRIMARY_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
+# Groq retired the llama-3.3 lineup; gpt-oss-120b is the current flagship
+# on their API (verified against /models with a live key). GROQ_MODEL env
+# still overrides for anyone pinning their own model.
+GROQ_PRIMARY_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_FALLBACK_MODEL = os.environ.get("GROQ_MODEL_FALLBACK", "openai/gpt-oss-20b")
 GROQ_TIMEOUT = 60.0  # seconds
 
 Z_AI_BIN = os.environ.get("Z_AI_BIN", "/usr/local/bin/z-ai")
@@ -232,8 +235,31 @@ def _canned_fallback(question: str, data_context) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENTIC LOOP — tool-calling wrapper
 # ─────────────────────────────────────────────────────────────────────────────
-MAX_TOOL_ITERATIONS = 5
-GROQ_TOOL_CALL_TIMEOUT = 60.0
+MAX_TOOL_ITERATIONS = 8
+GROQ_TOOL_CALL_TIMEOUT = 90.0
+MAX_TOKENS_SYNTHESIS = 6000
+
+# The reasoning contract every agentic call gets, on top of the role prompt.
+REASONING_PROTOCOL = """
+
+## HOW TO WORK (follow every time)
+1. PLAN: restate the question to yourself and list what facts you need.
+2. GATHER: call tools until you have those facts. Prefer the most specific
+   tool. It is fine — and encouraged — to chain several tools (e.g. school
+   summary → grade drill-down → specific students).
+3. CROSS-CHECK: before answering, verify every number you will cite actually
+   appeared in a tool result or the data snapshot. NEVER invent names,
+   numbers, or percentages. If a fact is missing, say what's missing.
+4. SYNTHESIZE: produce a detailed markdown answer with ## headers, **bold**,
+   and - bullets. Explain the WHY behind the numbers (causes, trade-offs),
+   then give concrete, prioritized recommendations.
+5. VISUALS: when a tool returns a ```chart block, include it VERBATIM in
+   your answer — the UI renders real graphs from it. Use a chart whenever
+   the answer is quantitative (trends, comparisons, distributions), and
+   explain what the chart shows in one sentence next to it.
+6. If tools fail twice for the same fact, answer with what you have and say
+   which data was unavailable — never guess.
+"""
 
 # Regex that picks a JSON tool-call out of the LLM's text response. The model
 # is instructed to print ONLY the JSON on its own line, but we are lenient:
@@ -297,8 +323,9 @@ def _execute_tool(tool_name: str, args: dict, tools: dict,
         avail = ", ".join(tools.keys())
         return f"Error: unknown tool '{tool_name}'. Available: {avail}."
     fn = spec["function"]
-    # Clean args: only pass keys the function actually accepts (best-effort).
-    cleaned = {k: v for k, v in (args or {}).items() if k != "_data"}
+    # Clean args: drop empty-string keys (some models emit {"": {}}) and the
+    # injected snapshot kwarg.
+    cleaned = {k: v for k, v in (args or {}).items() if k and k != "_data"}
     try:
         return str(fn(db=db, **ctx, **cleaned))
     except TypeError as e:
@@ -353,8 +380,12 @@ async def _call_groq_with_tools(
     body: dict[str, Any] = {
         "messages": messages,
         "temperature": 0.4,
-        "max_tokens": 2000,
+        "max_tokens": MAX_TOKENS_SYNTHESIS,
     }
+    # gpt-oss burns completion tokens on hidden reasoning before answering —
+    # keep it lean inside the tool loop so answers don't get truncated
+    if "gpt-oss" in GROQ_PRIMARY_MODEL or "gpt-oss" in GROQ_FALLBACK_MODEL:
+        body["reasoning_effort"] = "low"
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
@@ -408,6 +439,7 @@ async def ask_ai_agentic(
     tools: dict[str, dict],
     context_summary: str = "",
     ctx: Optional[dict] = None,
+    history: Optional[list[dict]] = None,
 ) -> dict:
     """Agentic LLM call with tool-calling.
 
@@ -426,6 +458,9 @@ async def ask_ai_agentic(
     ctx : dict, optional
         Extra kwargs to inject into every tool call (e.g. ``{"school": school}``
         for the principal or ``{"schools": [school_objs]}`` for the chairperson).
+    history : list[dict], optional
+        Prior conversation turns (``{"role": "user"|"assistant", "content"}``)
+        so follow-up questions work across panel messages.
 
     Returns
     -------
@@ -434,8 +469,8 @@ async def ask_ai_agentic(
     ctx = ctx or {}
     tools_used: list[str] = []
 
-    # Build the agentic system prompt: base role + tool list + context.
-    full_system = system_prompt.strip() + "\n\n" + _build_tool_list_section(tools)
+    # Build the agentic system prompt: base role + protocol + tool list + context.
+    full_system = system_prompt.strip() + "\n\n" + REASONING_PROTOCOL + "\n\n" + _build_tool_list_section(tools)
     if context_summary:
         full_system += "\n\n--- LIVE DATA SNAPSHOT ---\n" + context_summary
     full_system += (
@@ -447,10 +482,14 @@ async def ask_ai_agentic(
     )
 
     # Track the full conversation so the model has continuity.
-    messages: list[dict] = [
-        {"role": "system", "content": full_system},
-        {"role": "user", "content": question},
-    ]
+    messages: list[dict] = [{"role": "system", "content": full_system}]
+    # prior panel turns (already trimmed by the caller) → continuity
+    for turn in (history or [])[-8:]:
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content[:4000]})
+    messages.append({"role": "user", "content": question})
 
     use_groq = bool(GROQ_API_KEY)
     source = "fallback"

@@ -4,7 +4,7 @@ import re
 import statistics
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -1085,16 +1085,20 @@ def _pearson(pairs: list[tuple[float, float]]) -> Optional[float]:
 # ─────────────────────────────────────────────────────────────────────────────
 class AnalyzeBody(BaseModel):
     question: str
+    # recent panel turns (role: user|assistant, content) → follow-up memory
+    history: Optional[List[dict]] = None
 
 
 SYSTEM_PROMPT = (
-    "You are an AI assistant for a school principal. You have access to real, "
-    "live school data via tools. When you need specific info (a student's "
-    "details, a grade comparison, the at-risk list, etc.), call a tool by "
-    "responding with ONLY: {\"tool\":\"tool_name\",\"args\":{...}}. After "
-    "getting the tool result, give a detailed markdown answer with specific "
-    "names, numbers, and actionable recommendations. Use ## headers, "
-    "**bold**, and - bullet lists."
+    "You are the Fetch-X AI principal's analyst — a rigorous, data-driven "
+    "assistant with live, tool-based access to the school's real data "
+    "(students, classes, subjects, exams, attendance, tasks, teachers). "
+    "When you need specific facts, call tools (chain several if needed); "
+    "when a tool returns a ```chart block, include it verbatim so the "
+    "principal sees the graph. Answer with detailed markdown — ## headers, "
+    "**bold**, - bullets — citing exact names and numbers, explaining causes "
+    "and trade-offs, and ending with concrete prioritized recommendations. "
+    "Never invent data; if something isn't available, say so."
 )
 
 
@@ -1234,6 +1238,7 @@ async def ai_analyze(request: Request, body: AnalyzeBody, db: Session = Depends(
         tools=PRINCIPAL_TOOLS,
         context_summary=_compact_school_summary(data),
         ctx={"school": school, "_data": data},
+        history=body.history,
     )
     return {
         "answer": result["answer"],

@@ -1,12 +1,48 @@
 /* Resizable AI right panel — the prototype's shell with a REAL backend:
    suggestion chips submit, the input sends, answers are rendered as
-   markdown with source / tools_used badges, and failures get a graceful
-   error card with retry. Wired to POST /principal/ai/analyze. */
+   markdown with source / tools_used badges, ```chart blocks render real
+   in-theme graphs, and failures get a graceful error card. Conversation
+   memory: recent turns ride along so follow-up questions work.
+   Wired to POST /principal/ai/analyze. */
 import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, SendHorizontal, TrendingUp, Trophy, User } from 'lucide-react';
 import { analyze } from './data';
 import { prefersReducedMotion } from './util';
 import { SchoolLogo } from './DashSidebar';
+import { BarChart, Distro, LineChart } from './charts';
+
+/* ---------- AI chart blocks — render the backend's chart payloads ------ */
+export function AiChart({ spec }) {
+  if (!spec || typeof spec !== 'object') return null;
+  let body = null;
+  if (spec.type === 'bar' && Array.isArray(spec.items)) {
+    body = <BarChart items={spec.items.map((it) => ({ label: String(it.label ?? ''), val: Number(it.val) || 0, tip: it.tip }))} height={170} flat />;
+  } else if (spec.type === 'distro' && Array.isArray(spec.bands)) {
+    body = <Distro bands={spec.bands} total={spec.total || spec.bands.reduce((a, b) => a + (b.count || 0), 0)} />;
+  } else if (spec.type === 'line' && Array.isArray(spec.points)) {
+    body = <LineChart points={spec.points} height={170} />;
+  } else if (spec.type === 'donut') {
+    body = (
+      <div style={{ display: 'grid', placeItems: 'center', padding: '8px 0 12px' }}>
+        <div style={{ fontSize: 30, fontWeight: 800, color: 'var(--lvlD, var(--brand))' }}>
+          {Number(spec.value) || 0}%
+        </div>
+        <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.1em', color: 'var(--muted)' }}>
+          {(spec.title || '').toUpperCase()}
+        </div>
+      </div>
+    );
+  }
+  if (!body) return null;
+  return (
+    <div className="card" style={{ margin: '10px 0', overflow: 'hidden' }}>
+      {spec.title
+        ? <div className="label" style={{ padding: '10px 14px 2px', fontSize: 9, fontWeight: 800, letterSpacing: '.09em', color: 'var(--muted)' }}>{spec.title}</div>
+        : null}
+      <div style={{ padding: '2px 14px 12px' }}>{body}</div>
+    </div>
+  );
+}
 
 /* ---------- markdown renderer (ported from the legacy dashboard) ------ */
 function inline(text) {
@@ -41,8 +77,35 @@ export function MarkdownLite({ text }) {
       lt = null;
     }
   };
+  /* fenced blocks: ```chart → real graph, any other fence → pre */
+  let fence = null; // null | { lang, lines: [] }
   lines.forEach((line, i) => {
+    if (fence) {
+      if (line.trim().startsWith('```')) {
+        if (fence.lang === 'chart') {
+          try {
+            out.push(<AiChart key={`c${i}`} spec={JSON.parse(fence.lines.join('\n'))} />);
+          } catch { /* ignore malformed chart JSON */ }
+        } else {
+          out.push(
+            <pre key={`f${i}`} style={{
+              background: 'var(--chip)', borderRadius: 10, padding: '10px 12px',
+              fontSize: 11, overflowX: 'auto', margin: '8px 0',
+            }}>{fence.lines.join('\n')}</pre>,
+          );
+        }
+        fence = null;
+      } else {
+        fence.lines.push(line);
+      }
+      return;
+    }
     const t = line.trim();
+    if (t.startsWith('```')) {
+      flush();
+      fence = { lang: t.slice(3).trim().toLowerCase(), lines: [] };
+      return;
+    }
     if (!t) { flush(); return; }
     if (t.startsWith('### ') || t.startsWith('## ') || t.startsWith('# ')) {
       flush();
@@ -126,10 +189,16 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
     } catch { /* ignore */ }
   }, []);
 
-  /* ---- the real AI call ---- */
+  /* ---- the real AI call (with conversation memory) ---- */
   const ask = async (q) => {
     const question = (q ?? input).trim();
     if (!question || loading) return;
+    /* last few real turns ride along so follow-ups ("now compare the bottom
+       two") keep their context */
+    const history = msgs
+      .filter((m) => m.role === 'user' || m.role === 'bot')
+      .slice(-6)
+      .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }));
     setInput('');
     setMsgs((m) => [...m, { role: 'user', content: question }]);
     setLoading(true);
@@ -140,7 +209,7 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
       );
     }
     try {
-      const res = await analyze(question);
+      const res = await analyze(question, history);
       setMsgs((m) => [...m, {
         role: 'bot',
         content: res.answer,

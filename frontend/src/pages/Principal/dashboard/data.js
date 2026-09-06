@@ -117,9 +117,11 @@ export const fetchTeachers = () => get('/principal/teachers');
 export const fetchTeacherReport = (id) => get(`/principal/teacher-report/${id}`);
 
 
-/* POST /principal/ai/analyze → { answer, source, tools_used } */
-export const analyze = (question) =>
-  api.post('/principal/ai/analyze', { question }).then((r) => r.data);
+/* POST /principal/ai/analyze → { answer, source, tools_used }
+   `history` = recent panel turns (role: user|assistant, content) so the AI
+   remembers the conversation across questions. */
+export const analyze = (question, history = []) =>
+  api.post('/principal/ai/analyze', { question, history }).then((r) => r.data);
 
 /* ───────────────────────── v15 designer update ───────────────────────── */
 

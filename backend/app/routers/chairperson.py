@@ -5,7 +5,7 @@ import threading
 import time as _time
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -628,6 +628,8 @@ def _pearson(pairs: list[tuple[float, float]]) -> Optional[float]:
 # ─────────────────────────────────────────────────────────────────────────────
 class AnalyzeBody(BaseModel):
     question: str
+    # recent panel turns (role: user|assistant, content) → follow-up memory
+    history: Optional[List[dict]] = None
 
 
 SYSTEM_PROMPT = (
@@ -729,6 +731,7 @@ async def ai_analyze(request: Request, body: AnalyzeBody, db: Session = Depends(
         tools=CHAIRPERSON_TOOLS,
         context_summary=_compact_portfolio_summary(schools, per_school),
         ctx={"schools": schools, "_data": {"per_school": per_school}},
+        history=body.history,
     )
     return {
         "answer": result["answer"],
