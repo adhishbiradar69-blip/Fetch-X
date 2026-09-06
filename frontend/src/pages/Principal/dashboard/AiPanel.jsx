@@ -3,9 +3,10 @@
    markdown with source / tools_used badges, and failures get a graceful
    error card with retry. Wired to POST /principal/ai/analyze. */
 import { useEffect, useRef, useState } from 'react';
-import { ChevronRight, SendHorizontal, Sparkles, TrendingUp, Trophy, User } from 'lucide-react';
+import { ChevronRight, SendHorizontal, TrendingUp, Trophy, User } from 'lucide-react';
 import { analyze } from './data';
 import { prefersReducedMotion } from './util';
+import { SchoolLogo } from './DashSidebar';
 
 /* ---------- markdown renderer (ported from the legacy dashboard) ------ */
 function inline(text) {
@@ -183,7 +184,7 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
           </div>
 
           <div className="ai-card">
-            <div className="ai-avatar"><Sparkles strokeWidth={0} fill="currentColor" /></div>
+            <div className="ai-avatar"><SchoolLogo /></div>
             <div>
               <div className="t">Fetch-X AI</div>
               <div className="s">{subtitle}</div>
@@ -235,7 +236,15 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
             <>
               <div className="ask-center">
                 <div className="orb2" ref={orbRef}>
-                  <Sparkles strokeWidth={0} fill="currentColor" />
+                  <span
+                    style={{
+                      width: 38, height: 38, background: '#fff', borderRadius: '50%',
+                      padding: 4, display: 'grid', placeItems: 'center',
+                      boxShadow: '0 4px 12px -4px rgba(0,0,0,.35)',
+                    }}
+                  >
+                    <SchoolLogo />
+                  </span>
                 </div>
                 <h3>Ask Fetch-X AI</h3>
                 <p>Ask questions about performance, attendance, task completion, rankings, or patterns.</p>

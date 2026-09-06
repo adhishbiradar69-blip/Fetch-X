@@ -44,12 +44,35 @@ curl -X POST http://127.0.0.1:8000/admin/seed-full \
 Or just log in at http://localhost:5173 and click "Seed Full Demo Data" on the Admin Dashboard.
 
 ## Demo accounts (after seed-full)
-| Email | Password | Role |
-|---|---|---|
-| admin@schoolai.test | admin123 | Super Admin |
-| greenwood@admin.test | school123 | School Admin (Greenwood) |
-| principal@greenwood.test | principal123 | Principal |
-| chairperson@schoolai.test | chair123 | Chairperson |
+| Email | Password | Role | Lands on |
+|---|---|---|---|
+| root.schoolai@nexus-secure.internal | *(set once — secret)* | Super Admin (only one) | Principal dashboard + Class Teacher + Administration nav |
+| greenwood@admin.test | school123 | School Admin (Greenwood) | Principal dashboard + Class Teacher + Administration nav |
+| principal@greenwood.test | principal123 | Principal | Principal dashboard |
+| teacher1.greenwood@schoolai.test | teacher123 | Class Teacher | Class Teacher console |
+| parent@greenwood.test | parent123 | Parent | Parent view |
+| chairperson@schoolai.test | chair123 | Chairperson | Multi-school command center |
+
+Other schools follow the same pattern: `principal@sunrise.test`, `sunrise@admin.test`,
+`principal@radiant.test`, `radiant@admin.test` (same passwords).
+
+### Role → pages map
+- **Super Admin** (`super_admin`, exactly one account) — the full v15 dashboard
+  with all three nav groups: Principal UI, Class Teacher UI (previews the first
+  class), and Administration. The password is set once out-of-band; it is never
+  printed or reset by the seeder.
+- **School Admin** — same v15 shell; the Class Teacher group resolves to the
+  class they hold as CT (the seed's "preview post"), Administration links to
+  the students / accounts / classes management pages.
+- **Principal** — the v15 dashboard (School → Subject → Class → Student →
+  Teacher levels) plus the AI panel.
+- **Class Teacher** — the dedicated console: My Class, Attendance, Task
+  Completion, Academic Marks, Teaching Classes, My Report, Timetable.
+- **Chairperson / Parent** — read-only cross-school oversight / child view.
+
+### School logo
+Drop a `gnps-logo.png` into `frontend/public/` and it replaces the Fetch-X mark
+in the dashboard sidebar and the AI panel (falls back gracefully when absent).
 
 ## AI configuration (optional)
 The principal & chairperson AI assistants use Groq by default. Set a Groq API key:

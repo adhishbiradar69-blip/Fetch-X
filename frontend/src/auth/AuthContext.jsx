@@ -4,15 +4,17 @@ import api from '../api/client';
 const AuthContext = createContext(null);
 
 const ROLE_HOME = {
-  super_admin: '/admin/dashboard',
-  school_admin: '/admin/dashboard',
+  super_admin: '/principal/dashboard',
+  school_admin: '/principal/dashboard',
   principal: '/principal/dashboard',
   chairperson: '/chairperson/dashboard',
   parent: '/parent/view',
   /* v15: class teachers get the designed console (attendance, tasks, marks,
-     teaching classes, my report, timetable) inside the dashboard shell */
+     teaching classes, my report, timetable) inside the dashboard shell.
+     Admin roles land on the same v15 shell — accounts that also hold a
+     class-teacher post get the dual principal/CT nav there. */
   class_teacher: '/teacher/console',
-  admin: '/admin/dashboard', // legacy fallback
+  admin: '/principal/dashboard', // legacy fallback
 };
 
 export function homePathFor(role) {

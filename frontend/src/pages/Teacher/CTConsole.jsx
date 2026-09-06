@@ -9,7 +9,7 @@
      ctTeach  Teaching Classes    → /ct/teaching-classes
      ctMy     My Report           → /ct/teacher-report (via report modal)
      ctTT     Timetable           → /timetable/teacher/{me} (NEW backend) */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Menu, Moon, Sun } from 'lucide-react';
@@ -542,17 +542,110 @@ function CTTimetable({ teacherId }) {
 }
 
 /* ═════════════════════════════ the console shell ═════════════════════════ */
+
+function ModeButton() {
+  const { mode, toggle } = useTheme() || {};
+  return (
+    <button
+      type="button" className="btn-mode" onClick={toggle}
+      title={mode === 'dark' ? 'Light mode' : 'Dark mode'}
+      aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+    >
+      {mode === 'dark' ? <Sun strokeWidth={2} /> : <Moon strokeWidth={2} />}
+    </button>
+  );
+}
+
+/* CTWorkspace — the class-teacher console CONTENT (pagehead + pages +
+   report modals + toast). Purely driven by props so it can render standalone
+   (CTConsole below) or embedded in the principal dashboard's v15 shell when
+   the signed-in user also holds a class-teacher post (dual-mode sidebar). */
+export function CTWorkspace({ me, teach, page = 'ctHome' }) {
+  const [reportId, setReportId] = useState(null);
+  const [showMyReport, setShowMyReport] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setReportId(null); setShowMyReport(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  if (!me) {
+    return (
+      <main className="v15-main pd-main">
+        <div className="pd-skel tall" style={{ margin: 24 }} />
+      </main>
+    );
+  }
+
+  const cls = me.class;
+  const teacher = me.teacher;
+
+  return (
+    <main className="v15-main pd-main">
+      <header className="pagehead">
+        <div>
+          <div className="eyebrow">Fetch-X · Class Teacher</div>
+          <h1>Class Teacher — {cls.name}</h1>
+          <div className="subtitle">
+            {teacher.name} · {teacher.subject?.name || '—'} · Grade {cls.grade}
+          </div>
+        </div>
+        <div className="pagehead-mid gsearch" />
+        <div className="pagehead-actions">
+          <ModeButton />
+        </div>
+      </header>
+
+      {page === 'ctHome' && (
+        <ClassDetail
+          classId={cls.id}
+          classesAll={[]}
+          fetcher={fetchCtClassDashboard}
+          embedded
+          savedIds={new Set()}
+          onBookmark={() => {}}
+          onOpenReport={(s) => setReportId(s.id)}
+        />
+      )}
+      {page === 'ctAtt' && <CTAttendance cls={cls} />}
+      {page === 'ctTask' && <CTTasks cls={cls} />}
+      {page === 'ctMarks' && <CTMarks cls={cls} />}
+      {page === 'ctTeach' && (
+        <CTTeaching data={teach} onOpenReport={(s) => setReportId(s.id)} />
+      )}
+      {page === 'ctMy' && (
+        <CTMy report={teach?.__report || null} onOpenFull={() => setShowMyReport(true)} />
+      )}
+      {page === 'ctTT' && <CTTimetable teacherId={teacher.id} />}
+
+      {reportId != null && createPortal(
+        <ReportCardModal studentId={reportId} onClose={() => setReportId(null)} />,
+        document.body,
+      )}
+      {showMyReport && createPortal(
+        <TeacherReportModal teacherId={teacher.id} fetcher={async () => api.get('/ct/teacher-report').then((r) => r.data)} onClose={() => setShowMyReport(false)} />,
+        document.body,
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </main>
+  );
+}
+
 export default function CTConsole() {
   const navigate = useNavigate();
   const { logout } = useAuth();
-  const { mode, toggle } = useTheme() || {};
 
   const [me, setMe] = useState(null);
   const [meErr, setMeErr] = useState(false);
   const [teach, setTeach] = useState(null);
   const [page, setPage] = useState('ctHome');
-  const [reportId, setReportId] = useState(null);
-  const [showMyReport, setShowMyReport] = useState(false);
   const [mobNav, setMobNav] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try { return localStorage.getItem('si-nav') === '1'; } catch { return false; }
@@ -561,9 +654,6 @@ export default function CTConsole() {
     try { return localStorage.getItem('fx-ai') === '1'; } catch { return false; }
   });
   const [aiOpenMobile, setAiOpenMobile] = useState(false);
-  const [toast, setToast] = useState(null);
-  const mainRef = useRef(null);
-  const gsRef = useRef(null);
 
   useEffect(() => {
     fetchCtMe().then(setMe).catch(() => setMeErr(true));
@@ -584,11 +674,7 @@ export default function CTConsole() {
 
   useEffect(() => {
     const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault(); gsRef.current?.focus();
-      } else if (e.key === 'Escape') {
-        setReportId(null); setShowMyReport(false); setMobNav(false);
-      }
+      if (e.key === 'Escape') setMobNav(false);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -602,7 +688,6 @@ export default function CTConsole() {
   const navGo = useCallback((key) => {
     setMobNav(false);
     setPage(key);
-    mainRef.current?.scrollTo({ top: 0 });
   }, []);
 
   if (meErr) {
@@ -633,46 +718,7 @@ export default function CTConsole() {
         onSignOut={signOut}
       />
 
-      <main className="v15-main pd-main" ref={mainRef}>
-        <header className="pagehead">
-          <div>
-            <div className="eyebrow">Fetch-X · Class Teacher</div>
-            <h1>Class Teacher — {cls.name}</h1>
-            <div className="subtitle">
-              {teacher.name} · {teacher.subject?.name || '—'} · Grade {cls.grade}
-            </div>
-          </div>
-          <div className="pagehead-mid gsearch" />
-          <div className="pagehead-actions">
-            <button type="button" className="btn-mode" onClick={toggle}
-              title={mode === 'dark' ? 'Light mode' : 'Dark mode'}>
-              {mode === 'dark' ? <Sun strokeWidth={2} /> : <Moon strokeWidth={2} />}
-            </button>
-          </div>
-        </header>
-
-        {page === 'ctHome' && (
-          <ClassDetail
-            classId={cls.id}
-            classesAll={[]}
-            fetcher={fetchCtClassDashboard}
-            embedded
-            savedIds={new Set()}
-            onBookmark={() => {}}
-            onOpenReport={(s) => setReportId(s.id)}
-          />
-        )}
-        {page === 'ctAtt' && <CTAttendance cls={cls} />}
-        {page === 'ctTask' && <CTTasks cls={cls} />}
-        {page === 'ctMarks' && <CTMarks cls={cls} />}
-        {page === 'ctTeach' && (
-          <CTTeaching data={teach} onOpenReport={(s) => setReportId(s.id)} />
-        )}
-        {page === 'ctMy' && (
-          <CTMy report={teach?.__report || null} onOpenFull={() => setShowMyReport(true)} />
-        )}
-        {page === 'ctTT' && <CTTimetable teacherId={teacher.id} />}
-      </main>
+      <CTWorkspace me={me} teach={teach} page={page} />
 
       <button type="button" className="v15-mobtoggle" aria-label="Open navigation" onClick={() => setMobNav(true)}>
         <Menu strokeWidth={2.2} />
@@ -683,17 +729,6 @@ export default function CTConsole() {
       <button type="button" className="ai-fab" onClick={toggleAi} aria-label="Open AI panel">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5c.7 5 3.3 7.6 8.3 8.3-5 .7-7.6 3.3-8.3 8.3-.7-5-3.3-7.6-8.3-8.3 5-.7 7.6-3.3 8.3-8.3z" /></svg>
       </button>
-
-      {reportId != null && createPortal(
-        <ReportCardModal studentId={reportId} onClose={() => setReportId(null)} />,
-        document.body,
-      )}
-      {showMyReport && createPortal(
-        <TeacherReportModal teacherId={teacher.id} fetcher={async () => api.get('/ct/teacher-report').then((r) => r.data)} onClose={() => setShowMyReport(false)} />,
-        document.body,
-      )}
-
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
 }

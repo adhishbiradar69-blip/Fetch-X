@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { GitCompare, Menu, Moon, Plus, Sun, X } from 'lucide-react';
 import {
   fetchAttendanceSeries, fetchClassComparison, fetchClassComparisonBySubject, fetchClasses,
+  fetchCtMe, fetchCtTeachingClasses, fetchCtTeacherReport,
   fetchScoreDistribution, fetchSchoolRank, fetchStats, fetchStudents, fetchTeachers,
   fetchTermAverages,
 } from './dashboard/data';
@@ -27,6 +28,7 @@ import AiPanel from './dashboard/AiPanel';
 import GlobalSearch from './dashboard/GlobalSearch';
 import DashSidebar from './dashboard/DashSidebar';
 import { LevelThemeStyle } from './dashboard/LevelThemes';
+import { CTWorkspace } from '../Teacher/CTConsole';
 import { useTheme } from '../../components/ThemeProvider';
 import { useAuth } from '../../auth/AuthContext';
 import { Toast } from '../../components/ui';
@@ -98,6 +100,36 @@ export default function PrincipalDashboard() {
   });
   const [aiOpenMobile, setAiOpenMobile] = useState(false);
 
+  /* ---------------- dual mode (principal ↔ class teacher) ---------------- */
+  /* The designer's role-admin shell: an account that also holds a CT post
+     (school admins do in the seed; super-admin previews the first class)
+     gets a second nav group and switches modes in place. /ct/me is the
+     probe — it 404s for accounts with no class capacity. */
+  const [uiMode, setUiMode] = useState('p');
+  const [ctMe, setCtMe] = useState(null); // null = probing, false = no CT capacity
+  const [ctTeach, setCtTeach] = useState(null);
+  const [ctPage, setCtPage] = useState('ctHome');
+
+  useEffect(() => {
+    let alive = true;
+    fetchCtMe()
+      .then((me) => {
+        if (!alive) return;
+        setCtMe(me);
+        fetchCtTeachingClasses()
+          .then((d) => {
+            if (!alive) return;
+            fetchCtTeacherReport().then((r) => {
+              if (!alive) return;
+              setCtTeach({ ...d, __students: r.data.students || [], __report: r.data });
+            }).catch(() => { if (alive) setCtTeach(d); });
+          })
+          .catch(() => { if (alive) setCtTeach(null); });
+      })
+      .catch(() => { if (alive) setCtMe(false); });
+    return () => { alive = false; };
+  }, []);
+
   const mainRef = useRef(null);
   const gsRef = useRef(null);
   const [mobNav, setMobNav] = useState(false);
@@ -132,9 +164,17 @@ export default function PrincipalDashboard() {
     applyRoute(h);
   }, [applyRoute]);
 
-  /* sidebar nav → scroll to the level section (or switch view) */
+  /* sidebar nav → scroll to the level section, switch view, or jump into
+     the class-teacher mode (ct* keys come from the second nav group) */
   const navGo = useCallback((key) => {
     setMobNav(false);
+    if (key.startsWith('ct')) {
+      setUiMode('ct');
+      setCtPage(key);
+      mainRef.current?.scrollTo({ top: 0 });
+      return;
+    }
+    setUiMode('p');
     if (key === 'saved') { go('saved'); return; }
     if (view !== 'dash') { go(''); }
     requestAnimationFrame(() => {
@@ -305,11 +345,13 @@ export default function PrincipalDashboard() {
     go(`subject=${s.id ?? s.name}`);
   };
   const signOut = () => { logout(); navigate('/'); };
+  const isAdminRole = ['super_admin', 'school_admin', 'admin'].includes(user?.role);
+  const inCtMode = uiMode === 'ct' && !!ctMe;
 
   /* ================= render ================= */
   const booting = !stats && !statsErr;
   return (
-    <div className={`pd-root v15-root${navCollapsed ? ' nav-collapsed' : ''}${aiCollapsed ? ' ai-collapsed' : ''}${aiOpenMobile ? ' ai-open' : ''}${mobNav ? ' mob-nav' : ''}`}>
+    <div className={`pd-root v15-root${navCollapsed ? ' nav-collapsed' : ''}${aiCollapsed ? ' ai-collapsed' : ''}${aiOpenMobile ? ' ai-open' : ''}${mobNav ? ' mob-nav' : ''}${inCtMode ? ' ct-root' : ''}`}>
       <LevelThemeStyle />
       <DashSidebar
         active={view === 'dash' ? 'schoolSec' : view}
@@ -319,8 +361,18 @@ export default function PrincipalDashboard() {
         savedCount={savedIds.size}
         userName={user?.full_name}
         onSignOut={signOut}
+        mode={uiMode}
+        ctGroup={ctMe ? { label: (ctMe.class?.name || '').toUpperCase(), active: ctPage } : null}
+        adminGroup={isAdminRole}
       />
 
+      {/* class-teacher mode: the workspace replaces the whole principal main
+          (it brings its own pagehead), shell chrome stays */}
+      {inCtMode && (
+        <CTWorkspace me={ctMe} teach={ctTeach} page={ctPage} />
+      )}
+
+      {!inCtMode && (
       <main className="v15-main pd-main" ref={mainRef}>
         <header className="pagehead">
           <div>
@@ -433,6 +485,7 @@ export default function PrincipalDashboard() {
           />
         )}
       </main>
+      )}
 
       {/* mobile bar (below sidebar in DOM so the drawer paints above) */}
       <button
@@ -447,7 +500,10 @@ export default function PrincipalDashboard() {
         </div>
       )}
 
-      <AiPanel collapsed={aiCollapsed} onToggle={toggleAi} />
+      <AiPanel
+        collapsed={aiCollapsed} onToggle={toggleAi}
+        subtitle={inCtMode ? 'Analysing your class' : 'Analysing the entire school'}
+      />
       <button type="button" className="ai-fab" onClick={toggleAi} aria-label="Open AI panel">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5c.7 5 3.3 7.6 8.3 8.3-5 .7-7.6 3.3-8.3 8.3-.7-5-3.3-7.6-8.3-8.3 5-.7 7.6-3.3 8.3-8.3z" /></svg>
       </button>

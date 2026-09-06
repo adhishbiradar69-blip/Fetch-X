@@ -33,6 +33,10 @@
   box-shadow: 0 8px 18px -8px rgba(91, 79, 233, .6);
 }
 .dsb-brand .bx svg { width: 18px; height: 18px; }
+/* the school logo (public/gnps-logo.png) replaces the gradient tile when
+   provided — standalone 34px mark, like the designer sidebar */
+.dsb-logo { width: 34px; height: 34px; object-fit: contain; display: block; }
+.gnps-slot { width: 100%; height: 100%; object-fit: contain; display: block; }
 .dsb-brand .nm {
   font-size: 11.5px; font-weight: 900; letter-spacing: .04em; color: var(--ink);
   white-space: nowrap; overflow: hidden; max-width: 130px; opacity: 1;
