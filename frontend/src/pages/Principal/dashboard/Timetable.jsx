@@ -27,7 +27,9 @@ function Grid({ data, mode }) {
                   </span>
                 );
               }
-              const cls = L.kind === 'event' ? ' event' : L.kind === 'spec' ? ' spec' : '';
+              const cls = L.kind === 'event' ? ' event'
+                : (L.kind === 'spec' || L.kind === 'act') ? ' spec'
+                : L.kind === 'study' ? ' off' : '';
               return (
                 <span className={`tt-c${cls}`} key={`c${p}-${d}`} title={`${L.name} · ${L.teacher}`}>
                   <b>{L.short}</b><span>{String(L.teacher || '').split(' ').slice(1).join(' ') || L.teacher}</span>
@@ -75,8 +77,11 @@ export function ClassTimetable({ classId }) {
       <Grid data={data} mode="class" />
       <Foot items={[
         ['PERIODS / DAY', f.periods_per_day ?? 9],
-        ['SATURDAY', f.saturday ?? 7],
+        ['SATURDAY', f.saturday ?? 9],
+        ['ACADEMIC / DAY', f.academic_per_day ?? 7],
+        ['ACTIVITIES / DAY', f.activities_per_day ?? 2],
         ['TEACHER CONFLICTS', f.teacher_conflicts ?? 0],
+        ['SELF-STUDY', f.self_study_slots ?? 0],
         ['MASS PE', f.mass_pe ?? 'WED P1'],
         ['MASS PT', f.mass_pt ?? 'SAT P1'],
         ['CCA', f.cca ?? 'SAT P7'],

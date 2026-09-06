@@ -49,9 +49,10 @@ const CT_LINKS = [
   ['ctTT', 'Timetable'],
 ];
 const ADMIN_LINKS = [
-  ['/admin/dashboard', 'Dashboard'],
-  ['/admin/students', 'Students'],
-  ['/admin/accounts', 'Accounts'],
+  ['/admin/dashboard', 'Dashboard', 'adminDashboard'],
+  ['/admin/students', 'Students', 'adminStudents'],
+  ['/admin/accounts', 'Accounts', 'adminAccounts'],
+  ['/admin/extra-teachers', 'Subject Teachers', 'adminExtra'],
 ];
 
 /* School logo with a graceful fallback — drop gnps-logo.png into public/
@@ -96,7 +97,8 @@ function NavLink({ icon: Icon, label, lvl, active, onClick }) {
 
 export default function DashSidebar({
   active, onGo, onToggle, savedCount, userName, onSignOut, ct = false, ctLabel,
-  mode = 'p', ctGroup = null, adminGroup = false,
+  mode = 'p', ctGroup = null, adminGroup = false, adminActive = null,
+  savedHidden = false,
 }) {
   const navigate = useNavigate();
 
@@ -146,11 +148,11 @@ export default function DashSidebar({
         {adminGroup && (
           <>
             <div className="dsb-glabel" style={{ marginTop: 10 }}>ADMINISTRATION</div>
-            {ADMIN_LINKS.map(([href, label]) => (
+            {ADMIN_LINKS.map(([href, label, key]) => (
               <button
                 key={href} type="button"
                 data-tip={label}
-                className={location.pathname === href ? 'active' : ''}
+                className={adminActive === key ? 'active' : ''}
                 onClick={() => navigate(href)}
               >
                 <Briefcase strokeWidth={1.8} />
@@ -163,8 +165,8 @@ export default function DashSidebar({
 
       <div className="dsb-foot">
         {/* Saved lives in the principal context only — hidden while the CT
-            mode is active (designer ctmode hides it too). */}
-        {mode !== 'ct' && (
+            mode is active or on the standalone admin pages. */}
+        {mode !== 'ct' && !savedHidden && (
           <button
             type="button"
             data-lvl="5" data-tip="Saved Students"

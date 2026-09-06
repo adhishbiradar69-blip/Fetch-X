@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth, homePathFor } from './auth/AuthContext';
 import Layout from './components/Layout';
+import AdminShell from './components/AdminShell';
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import PublicLayout from './components/PublicLayout';
 import Login from './pages/Login';
@@ -9,13 +10,10 @@ import About from './pages/public/About';
 import Terms from './pages/public/Terms';
 import Privacy from './pages/public/Privacy';
 import CTConsole from './pages/Teacher/CTConsole';
-import AttendanceBoard from './pages/Teacher/AttendanceBoard';
-import TaskManager from './pages/Teacher/TaskManager';
-import MarksBoard from './pages/Teacher/MarksBoard';
-import ClassReport from './pages/ClassTeacher/ClassReport';
 import AdminDashboard from './pages/Admin/Dashboard';
 import AdminStudents from './pages/Admin/Students';
 import AccountCreation from './pages/Admin/Accounts';
+import ExtraTeachers from './pages/Admin/ExtraTeachers';
 import PrincipalDashboard from './pages/Principal/Dashboard';
 import ChairpersonMultiSchool from './pages/Chairperson/MultiSchool';
 import ChairpersonRankings from './pages/Chairperson/Rankings';
@@ -75,20 +73,14 @@ function LoginRoute() {
   return <Login />;
 }
 
-/* v15: the old teacher boards are folded into the Class Teacher console.
-   class_teacher users always land on the console; ADMIN roles (who may not
-   have a single CT class) keep the full board pages. */
-function TeacherRedirect({ attendance = false, tasks = false, marks = false }) {
-  const { user, token } = useAuth();
-  if (!token || !user) return <Navigate to="/login" replace />;
-  if (user.role === 'class_teacher') return <Navigate to="/teacher/console" replace />;
-  if (!['super_admin', 'school_admin', 'admin'].includes(user.role)) {
-    return <Navigate to={homePathFor(user.role)} replace />;
-  }
-  if (attendance) return <Layout><AttendanceBoard /></Layout>;
-  if (tasks) return <Layout><TaskManager /></Layout>;
-  if (marks) return <Layout><MarksBoard /></Layout>;
-  return <Layout><ClassReport /></Layout>;
+/* v15 consolidation: the old teacher boards are GONE. Every legacy
+   /teacher/* and /class-teacher/report URL redirects to the signed-in
+   user's role home — the class-teacher console (and the v15 shell's CT
+   mode for admins) covers all of it. The old chrome used to render here
+   and dead-end with "No Class Assigned" for accounts without a class. */
+function RoleHomeRedirect() {
+  const { user } = useAuth();
+  return <Navigate to={homePathFor(user?.role)} replace />;
 }
 
 function AnimatedRoutes() {
@@ -113,20 +105,29 @@ function AnimatedRoutes() {
         <ProtectedRoute bare roles={['principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
       <Route path="/teacher/console" element={
         <ProtectedRoute bare roles={['class_teacher', ...A]}><CTConsole /></ProtectedRoute>} />
-      {/* v15 consolidation: the class teacher's old boards are folded into
-          the console — class teachers land there; admins keep the boards. */}
-      <Route path="/teacher/attendance" element={<TeacherRedirect attendance />} />
-      <Route path="/teacher/tasks" element={<TeacherRedirect tasks />} />
-      <Route path="/teacher/marks" element={<TeacherRedirect marks />} />
-      <Route path="/class-teacher/report" element={<TeacherRedirect />} />
+      {/* legacy teacher URLs — always forward to the role home */}
+      <Route path="/teacher/attendance" element={<RoleHomeRedirect />} />
+      <Route path="/teacher/tasks" element={<RoleHomeRedirect />} />
+      <Route path="/teacher/marks" element={<RoleHomeRedirect />} />
+      <Route path="/class-teacher/report" element={<RoleHomeRedirect />} />
 
-      {/* Protected app pages — auth + role required */}
+      {/* Protected app pages — v15 chrome + role required */}
       <Route path="/admin/dashboard" element={
-        <ProtectedRoute roles={A}><AdminDashboard /></ProtectedRoute>} />
+        <ProtectedRoute bare roles={A}>
+          <AdminShell adminKey="adminDashboard"><AdminDashboard /></AdminShell>
+        </ProtectedRoute>} />
       <Route path="/admin/students" element={
-        <ProtectedRoute roles={A}><AdminStudents /></ProtectedRoute>} />
+        <ProtectedRoute bare roles={A}>
+          <AdminShell adminKey="adminStudents"><AdminStudents /></AdminShell>
+        </ProtectedRoute>} />
       <Route path="/admin/accounts" element={
-        <ProtectedRoute roles={A}><AccountCreation /></ProtectedRoute>} />
+        <ProtectedRoute bare roles={A}>
+          <AdminShell adminKey="adminAccounts"><AccountCreation /></AdminShell>
+        </ProtectedRoute>} />
+      <Route path="/admin/extra-teachers" element={
+        <ProtectedRoute bare roles={A}>
+          <AdminShell adminKey="adminExtra"><ExtraTeachers /></AdminShell>
+        </ProtectedRoute>} />
       {/* v5 consolidation: the designer's principal section is ONE page —
           every former sub-page lives inside the dashboard (sections +
           modals). Old URLs land on the dashboard. */}
