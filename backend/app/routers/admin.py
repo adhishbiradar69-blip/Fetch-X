@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import date, timedelta, datetime, timezone
+from typing import Optional
 import random
 from passlib.context import CryptContext
 
@@ -21,12 +22,13 @@ from app.models.teacher_assignment import TeacherAssignment
 from app.schemas.student import SchoolCreate, ClassCreate, StudentCreate
 from app.schemas.admin import (
     SubjectCreate, GradeSubjectAdd, ExamCreate, AccountCreate, AssignBody,
-    GradeSubjectRange, ExamRange,
+    GradeSubjectRange, ExamRange, ExtraTeacherCreate,
 )
 from app.dependencies import (
     get_current_user, require_role, require_super_admin, require_school_admin,
     assert_school_access, assert_class_access,
 )
+from app.models.extra_teacher import ExtraTeacher
 from app.routers.auth import get_password_hash, _validate_email, _validate_password_strength
 from app import config
 
@@ -1043,3 +1045,77 @@ def seed_full(db: Session = Depends(get_db), user=Depends(require_super_admin)):
         students=result["students"], accounts=result["accounts"],
     )
     return result
+
+
+# ──────────────────────────────────────────────────────────────
+# EXTRA ("SUBJECT") TEACHERS — timetable-only staff
+# These never get a user account and never enter TeacherAssignment,
+# so every dashboard/ranking/AI answer is untouched by design; they
+# only ever appear in generated timetables.
+# ──────────────────────────────────────────────────────────────
+def _extra_teacher_target_school(user, db: Session, school_id=None) -> School:
+    if user.role == "super_admin":
+        if school_id:
+            sch = db.query(School).filter(School.id == int(school_id)).first()
+            if not sch:
+                raise HTTPException(status_code=404, detail="School not found.")
+            return sch
+        # root has no school of its own — manage the first school
+        sch = db.query(School).order_by(School.id).first()
+        if not sch:
+            raise HTTPException(status_code=404, detail="No schools configured. Seed data first.")
+        return sch
+    if not user.school_id:
+        raise HTTPException(status_code=403, detail="No school assigned to your account.")
+    return db.query(School).filter(School.id == user.school_id).first()
+
+
+@router.get("/extra-teachers")
+def list_extra_teachers(school_id: Optional[int] = None, db: Session = Depends(get_db),
+                        user=Depends(require_school_admin)):
+    sch = _extra_teacher_target_school(user, db, school_id)
+    rows = (db.query(ExtraTeacher)
+              .filter(ExtraTeacher.school_id == sch.id)
+              .order_by(ExtraTeacher.id).all())
+    subs = {s.id: s.name for s in db.query(Subject).all()}
+    return [{"id": r.id, "name": r.name,
+             "subject_id": r.subject_id,
+             "subject": subs.get(r.subject_id) if r.subject_id else None,
+             "activity": r.activity,
+             "max_daily": r.max_daily} for r in rows]
+
+
+@router.post("/extra-teachers")
+def create_extra_teacher(data: ExtraTeacherCreate, db: Session = Depends(get_db),
+                         user=Depends(require_school_admin)):
+    sch = _extra_teacher_target_school(user, db, data.school_id)
+    if not data.subject_id and not data.activity:
+        raise HTTPException(status_code=400,
+                            detail="Pick a subject or an activity for this teacher.")
+    if data.subject_id:
+        if not db.query(Subject).filter(Subject.id == data.subject_id).first():
+            raise HTTPException(status_code=404, detail="Subject not found.")
+    row = ExtraTeacher(school_id=sch.id, name=data.name.strip(),
+                       subject_id=data.subject_id, activity=data.activity,
+                       max_daily=data.max_daily)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    _audit(user.email, "extra_teacher.create", school_id=sch.id, name=row.name)
+    return {"id": row.id, "name": row.name, "subject_id": row.subject_id,
+            "activity": row.activity, "max_daily": row.max_daily}
+
+
+@router.delete("/extra-teachers/{teacher_id}")
+def delete_extra_teacher(teacher_id: int, school_id: Optional[int] = None,
+                         db: Session = Depends(get_db),
+                         user=Depends(require_school_admin)):
+    sch = _extra_teacher_target_school(user, db, school_id)
+    row = db.query(ExtraTeacher).filter(ExtraTeacher.id == teacher_id,
+                                        ExtraTeacher.school_id == sch.id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Subject teacher not found.")
+    db.delete(row)
+    db.commit()
+    _audit(user.email, "extra_teacher.delete", school_id=sch.id, name=row.name)
+    return {"deleted": teacher_id}

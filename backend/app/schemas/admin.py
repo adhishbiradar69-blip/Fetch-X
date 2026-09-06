@@ -71,3 +71,22 @@ class AccountCreate(BaseModel):
 
 class AssignBody(BaseModel):
     user_id: int
+
+
+class ExtraTeacherCreate(BaseModel):
+    """Timetable-only subject teacher (never appears in dashboards)."""
+    name: str
+    subject_id: Optional[int] = None   # academic coverage
+    activity: Optional[str] = None     # activity coverage ('games', 'supw', …)
+    max_daily: int = Field(default=7, ge=1, le=9)
+    school_id: Optional[int] = None    # super_admin targets a specific school
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v):
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("Name is required")
+        if len(s) > 120:
+            raise ValueError("Name must be at most 120 characters")
+        return s
