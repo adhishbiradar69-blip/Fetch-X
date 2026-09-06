@@ -679,7 +679,7 @@ export default function CTConsole() {
       </button>
       {mobNav && <div className="v15-mobbackdrop" onClick={() => setMobNav(false)} role="presentation" />}
 
-      <AiPanel collapsed={aiCollapsed} onToggle={toggleAi} />
+      <AiPanel collapsed={aiCollapsed} onToggle={toggleAi} subtitle="Analysing your class" />
       <button type="button" className="ai-fab" onClick={toggleAi} aria-label="Open AI panel">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5c.7 5 3.3 7.6 8.3 8.3-5 .7-7.6 3.3-8.3 8.3-.7-5-3.3-7.6-8.3-8.3 5-.7 7.6-3.3 8.3-8.3z" /></svg>
       </button>

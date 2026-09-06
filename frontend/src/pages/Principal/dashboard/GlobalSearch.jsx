@@ -132,7 +132,7 @@ export default function GlobalSearch({
         onFocus={openPop}
         onKeyDown={onKeyDown}
       />
-      <kbd>Ctrl K</kbd>
+      <kbd className="gsk">Ctrl K</kbd>
       {open && query ? (
         <div className="gs-pop open" ref={popRef}>
           {!classes.length && !visibleStudents.length && !subjectRows.length && !loading ? (

@@ -1008,6 +1008,14 @@ body.dark .btn-primary { background:#7468f2; }
   animation:float 6s ease-in-out infinite;
 }
 .squircle svg { width:44%; height:44%; stroke-width:1.5; }
+/* Real product capture in the hero — framed like an app window, not a
+   floating blob; the hard-offset shadow keeps the Fetch-X signature. */
+.hero-shot {
+  position:relative; width:min(560px,100%); height:auto; display:block;
+  border-radius:18px; border:1px solid var(--line);
+  box-shadow:12px 14px 0 0 var(--shadow), 0 40px 80px -30px rgba(0,0,0,.55);
+  background:var(--surf);
+}
 
 /* sections */
 .sec-head { text-align:center; max-width:640px; margin:0 auto 52px; }
@@ -1026,8 +1034,9 @@ body.dark .btn-primary { background:#7468f2; }
   width:78px; height:78px; border-radius:50%; display:grid; place-items:center; color:#fff;
   font-size:28px; font-weight:800; margin:0 auto 20px;
 }
-.pav.a, .team-avatar { background:linear-gradient(140deg,#8d80fa,#5b4fe9); }
-.pav.k { background:linear-gradient(140deg,#34d399,#10b981); }
+/* Both founder cards use the same brand accent — parallel roles deserve
+   parallel color; the green/purple split read as arbitrary variety. */
+.pav.a, .team-avatar, .pav.k { background:linear-gradient(140deg,#8d80fa,#5b4fe9); }
 .pname, .team-name { font-size:22px; font-weight:800; color:var(--ink); }
 .prole, .team-role {
   display:inline-block; margin:12px 0 16px; font-size:10px; font-weight:800; letter-spacing:.13em;
@@ -1038,11 +1047,16 @@ body.dark .btn-primary { background:#7468f2; }
 
 /* features */
 .feat-grid, .feature-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:26px; }
+/* landing feature row: slight asymmetry so the row doesn't read as three
+   identical cards; collapses back to uniform below 980px */
+.fx-landing .feat-grid { grid-template-columns:1.35fr 1fr 1fr; }
+@media (max-width:980px) { .fx-landing .feat-grid { grid-template-columns:1fr; } }
 .fic, .feature-icon {
   width:52px; height:52px; border-radius:15px; display:grid; place-items:center;
   background:var(--lav); color:var(--brand);
 }
 .fic.teal { background:var(--teal-soft); color:var(--teal); }
+.fic.amber { background:rgba(245,158,11,.16); color:#f59e0b; }
 .fic svg, .feature-icon svg { width:24px; height:24px; }
 .fcard h3, .feature-card h3 { font-size:18.5px; font-weight:800; color:var(--ink); margin:22px 0 10px; }
 .fcard p, .feature-card p { font-size:14px; line-height:1.75; color:var(--body-text); }
@@ -1151,7 +1165,7 @@ body.dark .btn-primary { background:#7468f2; }
    170px already reserves space for the fixed pill nav (prototype-accurate). */
 .public-shell.flush { padding-top:0; }
 .fx-landing { position:relative; z-index:1; overflow-x:clip; }
-.fx-landing > section:not(.hero) { padding:100px 0; }
+.fx-landing > section:not(.hero) { padding:84px 0; }
 .fx-landing > section.pt-30 { padding-top:30px; }
 .mnote a { color:var(--brand); font-weight:700; }
 @media (max-width:880px) {
@@ -1921,6 +1935,8 @@ tr.clickable { cursor:pointer; }
   .ap-grid { grid-template-columns:1fr; }
   .searchbar .count { display:none; }
   .pagehead-mid { max-width:none; order:3; }
+  /* keyboard shortcut hint is meaningless on touch layouts */
+  .gsearch .gsk { display:none; }
   .report .subject-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .report .rep-charts { grid-template-columns:1fr; }
 }

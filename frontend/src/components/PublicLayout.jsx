@@ -153,7 +153,7 @@ export default function PublicLayout({ children, flush = false, spy = null }) {
               <Link to="/login">Sign In</Link>
             </nav>
           </div>
-          <p className="fcopy">© {new Date().getFullYear()} Fetch-X — Data Intelligence Platform. All rights reserved.</p>
+          <p className="fcopy">© {new Date().getFullYear()} Fetch-X — Intelligent school management. All rights reserved.</p>
         </div>
       </footer>
     </div>

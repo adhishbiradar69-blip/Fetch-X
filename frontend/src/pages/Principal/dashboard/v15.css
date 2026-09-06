@@ -234,7 +234,9 @@ body.dark .dsb-brand .nm b { background: linear-gradient(90deg, #8b7cf6, #b7acff
   .dsb { position: fixed; z-index: 80; left: 0; top: 0; bottom: 0; transform: translateX(-100%); transition: transform .25s; box-shadow: 0 0 40px rgba(0,0,0,.25); }
   .v15-root.mob-nav .dsb { transform: none; }
   .ct-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .v15-main { padding: 16px 14px 28px; }
+  /* clear the fixed .v15-mobtoggle (40px + 12px top) so it can't overlap
+     the page title on phones */
+  .v15-main { padding: 66px 14px 28px; }
   .v15-mobtoggle {
     display: grid; place-items: center; position: fixed; z-index: 70; left: 12px; top: 12px;
     width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line);

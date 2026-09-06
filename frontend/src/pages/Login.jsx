@@ -115,7 +115,7 @@ export default function Login() {
 
         <motion.p className="login-footer" {...field(0.3)}>
           <Link to="/" className="login-footer-back"><ArrowLeft size={13} /> Back to site</Link>
-          <span>Fetch-X Data Intelligence Platform · v1.1</span>
+          <span>Fetch-X · Intelligent school management</span>
         </motion.p>
       </motion.div>
     </div>

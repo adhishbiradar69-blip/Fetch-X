@@ -5,9 +5,10 @@ import { motion, AnimatePresence, MotionConfig, useInView } from 'framer-motion'
 import { AlertCircle, ArrowRight, Loader2, Sparkles, X } from 'lucide-react';
 import { CountUp } from '../../components/ui.jsx';
 import { useAuth, homePathFor } from '../../auth/AuthContext';
+import dashHero from '../../assets/dashboard-hero.png';
 
-/* Fetch-X landing page — 1:1 rebuild of the designer prototype
-   (upload/index.html): hero with floating squircle, team duo, 3 feature
+/* Fetch-X landing page — rebuilt from the designer prototype
+   (upload/index.html): hero with a real product capture, team duo, feature
    cards, count-up stats band, CTA, privacy card, and a sign-in modal wired
    to REAL auth (POST /auth/login via the shared api client through
    AuthContext — same flow as Login.jsx).
@@ -26,17 +27,6 @@ const rv = (delay = 0) => ({
 });
 
 /* ── Exact inline iconography from the prototype (sized by the CSS kit) ── */
-const CapIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 9.5L12 4 2 9.5l10 5.5 10-5.5z" />
-    <path d="M6 12v4.5c0 1.4 2.7 2.8 6 2.8s6-1.4 6-2.8V12" />
-  </svg>
-);
-const CheckIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4.5 12.5l5 5 10-11" />
-  </svg>
-);
 const PlayIcon = (
   <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 20 12 7 20" /></svg>
 );
@@ -112,32 +102,32 @@ const TEAM = [
 const FEATURES = [
   {
     icon: ChartIcon,
-    teal: false,
+    tone: '',
     title: 'Analytics that matter',
     body: 'Real-time dashboards for grades, attendance, exam performance, and at-risk detection — built for principals and leadership.',
   },
   {
     icon: BotIcon,
-    teal: false,
+    tone: 'teal',
     title: 'AI Assistant',
     body: 'Ask plain-English questions about your school. Get answers with named students, specific numbers, and action recommendations.',
   },
   {
     icon: SchoolIcon,
-    teal: true,
+    tone: 'amber',
     title: 'Term-wise rollups',
     body: 'Every class, section, and student tracked across three terms — rankings, trends, and distribution in one view.',
   },
 ];
 
+/* Real volumes from the demo dataset (3 seeded schools) — no invented
+   outcomes, just what the platform actually processes. */
 const STATS = [
-  { icon: PersonIcon, value: 900, suffix: '', label: 'Demo students seeded' },
-  { icon: SchoolIcon, value: 1, suffix: '', label: 'Demo school' },
-  { icon: TrendIcon, value: 80, suffix: '%', label: 'Avg school performance' },
-  { icon: StarIcon, value: 3, suffix: '', label: 'House sections' },
+  { icon: PersonIcon, value: 2700, suffix: '+', label: 'Student records' },
+  { icon: SchoolIcon, value: 90, suffix: '', label: 'Class sections' },
+  { icon: StarIcon, value: 6, suffix: '', label: 'Subjects, term-tracked' },
+  { icon: TrendIcon, value: 48600, suffix: '+', label: 'Marks analysed' },
 ];
-
-const CHECKS = ['Role-based access', 'Insights in seconds', 'Term-wise rollups'];
 
 export default function Landing() {
   const navigate = useNavigate();
@@ -222,14 +212,15 @@ export default function Landing() {
                   {PlayIcon} Live Demo
                 </button>
               </motion.div>
-              <motion.div className="checks" {...rv(0.24)}>
-                {CHECKS.map((c) => (
-                  <span className="check" key={c}>{CheckIcon} {c}</span>
-                ))}
-              </motion.div>
             </div>
             <motion.div className="hero-art" {...rv(0.15)}>
-              <div className="squircle">{CapIcon}</div>
+              <img
+                className="hero-shot"
+                src={dashHero}
+                alt="Fetch-X principal dashboard — school-wide performance, score distribution, and attendance trend"
+                width="1440"
+                height="900"
+              />
             </motion.div>
           </div>
         </section>
@@ -264,7 +255,7 @@ export default function Landing() {
             <div className="feat-grid">
               {FEATURES.map((f, i) => (
                 <motion.div className="fcard" {...rv(i * 0.08)} key={f.title}>
-                  <div className={`fic${f.teal ? ' teal' : ''}`}>{f.icon}</div>
+                  <div className={`fic${f.tone ? ` ${f.tone}` : ''}`}>{f.icon}</div>
                   <h3>{f.title}</h3>
                   <p>{f.body}</p>
                 </motion.div>
@@ -295,7 +286,7 @@ export default function Landing() {
                 <button type="button" className="btn btn-primary" onClick={openAuth}>
                   Sign In <ArrowRight size={15} />
                 </button>
-                <a className="btn btn-ghost" href="#features">Learn More</a>
+                <a className="btn btn-ghost" href="#features">See features</a>
               </div>
             </motion.div>
           </div>

@@ -132,12 +132,12 @@ export function Distro({ bands = [], total = 0 }) {
               style={{ width: reveal ? `${r.share}%` : 0, transitionDelay: `${i * 70}ms` }}
             />
           </div>
-          <span className="d-n">{r.n}<em>· {Math.round(r.share)}%</em></span>
+          <span className="d-n">{r.n.toLocaleString()}<em>· {Math.round(r.share)}%</em></span>
         </div>
       ))}
       <div className="d-foot">
-        <span>TOTAL <b>{total}</b></span>
-        {best && <span>BEST BAND <b>{best.label}%</b> ({best.n})</span>}
+        <span>TOTAL <b>{total.toLocaleString()}</b></span>
+        {best && <span>BEST BAND <b>{best.label}%</b> ({best.n.toLocaleString()})</span>}
       </div>
     </div>
   );

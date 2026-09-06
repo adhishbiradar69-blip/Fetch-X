@@ -72,7 +72,7 @@ const MIN_W = 210;
 const MAX_W = 440;
 const DEF_W = 238;
 
-export default function AiPanel({ collapsed, onToggle }) {
+export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the entire school' }) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -146,8 +146,8 @@ export default function AiPanel({ collapsed, onToggle }) {
         source: res.source,
         tools: res.tools_used || [],
       }]);
-    } catch {
-      setMsgs((m) => [...m, { role: 'error', question }]);
+    } catch (err) {
+      setMsgs((m) => [...m, { role: 'error', question, status: err?.response?.status }]);
     } finally {
       setLoading(false);
       inputRef.current?.focus();
@@ -186,7 +186,7 @@ export default function AiPanel({ collapsed, onToggle }) {
             <div className="ai-avatar"><Sparkles strokeWidth={0} fill="currentColor" /></div>
             <div>
               <div className="t">Fetch-X AI</div>
-              <div className="s">Analysing the entire school</div>
+              <div className="s">{subtitle}</div>
             </div>
           </div>
 
@@ -195,10 +195,15 @@ export default function AiPanel({ collapsed, onToggle }) {
               {msgs.map((m, i) => {
                 if (m.role === 'user') return <div className="ai-msg user" key={i}>{m.content}</div>;
                 if (m.role === 'error') {
+                  /* 403 means "not your role", not "backend down" — a retry
+                     can never succeed, so it's hidden. */
+                  const forbidden = m.status === 403;
                   return (
                     <div className="ai-err" key={i}>
-                      <span>The AI could not be reached. Check that the backend is running, then retry.</span>
-                      <button type="button" onClick={() => retry(m.question)}>RETRY</button>
+                      <span>{forbidden
+                        ? 'AI insights are available to principal and admin accounts.'
+                        : 'The AI could not be reached. Check that the backend is running, then retry.'}</span>
+                      {!forbidden && <button type="button" onClick={() => retry(m.question)}>RETRY</button>}
                     </div>
                   );
                 }

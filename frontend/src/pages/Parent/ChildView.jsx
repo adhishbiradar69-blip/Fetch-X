@@ -107,10 +107,10 @@ export default function ParentChildView() {
       <motion.div variants={staggerContainer} initial="initial" animate="animate" className="card" style={{ marginTop: 6 }}>
         <div className="card-stats cols-4">
           {[
-            { v: data.marks.length, l: 'Subject Scores', Icon: Library, accent: 'a-indigo' },
-            { v: avg, l: 'Average %', Icon: BarChart3, accent: 'a-teal', suffix: '%' },
-            { v: data.attendance.rate, l: 'Attendance %', Icon: Check, accent: 'a-amber', suffix: '%' },
-            { v: data.attendance.present, l: 'Days Present', Icon: Calendar, accent: 'a-pink' },
+            { v: data.marks.length, l: 'Exams recorded', Icon: Library, accent: 'a-indigo' },
+            { v: avg, l: 'Average score', Icon: BarChart3, accent: 'a-teal', suffix: '%' },
+            { v: data.attendance.rate, l: 'Attendance', Icon: Check, accent: 'a-amber', suffix: '%' },
+            { v: data.attendance.present, l: 'Days present', Icon: Calendar, accent: 'a-pink' },
           ].map((s, i) => {
             const SIcon = s.Icon;
             return (
