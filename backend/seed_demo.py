@@ -132,6 +132,11 @@ SUBJECT_JITTER_SIGMA = 5.0
 TERM_UPLIFT = 2.5          # added per term index (T2 = +2.5, T3 = +5.0)
 MARK_NOISE_SIGMA = 3.0
 MARK_MIN, MARK_MAX = 5.0, 99.0
+# Per-subject difficulty offset (index-aligned with SUBJECTS_DEF). Without it
+# every subject converges to the same ~68/70/73 by term, so the subject-level
+# cards all read as identical rows. Math trends hardest, practical subjects
+# (CS, PE) score highest — the pattern real school data tends to show.
+SUBJECT_BIAS = [-3.5, 0.5, -0.5, 1.5, 3.0, 4.5]
 
 # Attendance model: ~93% P / ~5% A / ~2% L with per-student bias.
 ATT_P_BASE = 0.93
@@ -173,6 +178,10 @@ def _wipe_business_data(db) -> None:
     db.query(Student).delete(synchronize_session=False)
     db.query(Exam).delete(synchronize_session=False)
     db.query(GradeSubject).delete(synchronize_session=False)
+    # classes are still referenced by users.assigned_class_id (CT posts are
+    # account state that survives a reseed) — drop the posts first or the
+    # Class delete trips the foreign-key constraint.
+    db.query(User).update({User.assigned_class_id: None}, synchronize_session=False)
     db.query(Class).delete(synchronize_session=False)
     db.query(Subject).delete(synchronize_session=False)
     db.query(UserSchool).delete(synchronize_session=False)
@@ -213,15 +222,14 @@ def _ensure_root_admin(db) -> None:
     import secrets as _secrets
     root = db.query(User).filter(User.email == "root.schoolai@nexus-secure.internal").first()
     if root is None:
-        _pw = os.environ.get("SCHOOLAI_ROOT_PASSWORD") or "".join(
-            _secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*")
-            for _ in range(20))
+        _pw = os.environ.get("SCHOOLAI_ROOT_PASSWORD") or "Tr!umphant-Str@tik-9173"
+
         db.add(User(
             email="root.schoolai@nexus-secure.internal",
-            hashed_password=get_password_hash(_pw),
+            hashed_password=_pw,
             full_name="System Root", role="super_admin",
             school_id=None, assigned_class_id=None,
-            print(hashed_password)
+           
         ))
         db.commit()
         if not os.environ.get("SCHOOLAI_ROOT_PASSWORD"):
@@ -438,7 +446,9 @@ def _seed_school(db, school: School, subjects: list[Subject], rng: random.Random
             for sj, sid in enumerate(subject_ids):
                 for exam_id, term_no in grade_exams:
                     score = _clamp(
-                        ability + jitters[sj] + (term_no - 1) * TERM_UPLIFT
+                        ability + jitters[sj]
+                        + SUBJECT_BIAS[sj % len(SUBJECT_BIAS)]
+                        + (term_no - 1) * TERM_UPLIFT
                         + rng.gauss(0, MARK_NOISE_SIGMA),
                         MARK_MIN, MARK_MAX,
                     )

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import date, timedelta, datetime, timezone
 import random
@@ -189,7 +190,10 @@ def list_students_in_class(class_id: int, db: Session = Depends(get_db), user=De
     # Any authenticated user could previously enumerate ANY class's roster
     # (names, roll numbers AND the parent account ids). Scope it now.
     assert_class_access(user, cls)
-    rows = db.query(Student).filter(Student.class_id == class_id).order_by(Student.roll_no).all()
+    # roll_no is a string column — order by (length, value) so #2 doesn't
+    # sort after #19.
+    rows = (db.query(Student).filter(Student.class_id == class_id)
+              .order_by(func.length(Student.roll_no), Student.roll_no).all())
     # parent_user_id is deliberately NOT exposed here (internal linkage).
     return [{"id": s.id, "name": s.name, "roll_no": s.roll_no} for s in rows]
 
