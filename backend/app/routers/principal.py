@@ -12,7 +12,8 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user, require_role
+from app.dependencies import (assert_class_access, assert_student_access,
+                              get_current_user, require_role)
 from app.rate_limit import limiter
 from app.models.attendance import Attendance
 from app.models.class_ import Class
@@ -1523,7 +1524,7 @@ def attendance_analytics(db: Session = Depends(get_db), user=Depends(_allowed)):
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/attendance/series")
 def attendance_series(scope: str = "school", id: Optional[int] = None, days: int = 90,
-                      db: Session = Depends(get_db), user=Depends(_allowed)):
+                      db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Daily attendance percentage for the last `days` calendar days.
 
     Returns {"points": [{"date": "YYYY-MM-DD", "pct": 93.4}, ...]} — exactly
@@ -1532,8 +1533,12 @@ def attendance_series(scope: str = "school", id: Optional[int] = None, days: int
     existing attendance_rate in `_gather_school_data`, /attendance/summary and
     /principal/attendance/analytics, so numbers agree across the UI (L counts
     against the rate). Days with no records yield pct = null.
+
+    Scope rules: "school" stays leadership-only; "class" and "student" open up
+    to the same object-level guards the /attendance router uses, so the v15
+    class-teacher console and report cards can load their own class's trend
+    without holding a principal role.
     """
-    school = _school_of(user, db)
     days = max(1, min(int(days or 90), 365))
     today = date.today()
     start = today - timedelta(days=days - 1)
@@ -1544,6 +1549,10 @@ def attendance_series(scope: str = "school", id: Optional[int] = None, days: int
                  .all())
 
     if scope == "school":
+        if user.role not in ("principal", "super_admin", "school_admin"):
+            raise HTTPException(status_code=403,
+                                detail="School-wide analytics require a leadership role.")
+        school = _school_of(user, db)
         rows = _daily(
             db.query(Attendance.date.label("d"),
                      func.count(Attendance.id).label("total"),
@@ -1554,9 +1563,10 @@ def attendance_series(scope: str = "school", id: Optional[int] = None, days: int
     elif scope == "class":
         if not id:
             raise HTTPException(status_code=400, detail="Query param 'id' is required for scope=class.")
-        cls = db.query(Class).filter(Class.id == id, Class.school_id == school.id).first()
+        cls = db.query(Class).filter(Class.id == id).first()
         if not cls:
-            raise HTTPException(status_code=404, detail="Class not found in your school.")
+            raise HTTPException(status_code=404, detail="Class not found.")
+        assert_class_access(user, cls)
         rows = _daily(
             db.query(Attendance.date.label("d"),
                      func.count(Attendance.id).label("total"),
@@ -1566,12 +1576,10 @@ def attendance_series(scope: str = "school", id: Optional[int] = None, days: int
     elif scope == "student":
         if not id:
             raise HTTPException(status_code=400, detail="Query param 'id' is required for scope=student.")
-        stu = (db.query(Student)
-                 .join(Class, Student.class_id == Class.id)
-                 .filter(Student.id == id, Class.school_id == school.id)
-                 .first())
+        stu = db.query(Student).filter(Student.id == id).first()
         if not stu:
-            raise HTTPException(status_code=404, detail="Student not found in your school.")
+            raise HTTPException(status_code=404, detail="Student not found.")
+        assert_student_access(user, stu, db)
         rows = _daily(
             db.query(Attendance.date.label("d"),
                      func.count(Attendance.id).label("total"),
@@ -2327,17 +2335,29 @@ def school_rank(db: Session = Depends(get_db), user=Depends(_allowed)):
 
 
 @router.get("/student-report/{student_id}")
-def student_report(student_id: int, db: Session = Depends(get_db), user=Depends(_allowed)):
+def student_report(student_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Report card for one student: band, term averages, attendance series,
-    per-subject marks + task completion and class/grade/school ranks."""
-    school = _school_of(user, db)
-    stu = (db.query(Student)
-             .join(Class, Student.class_id == Class.id)
-             .filter(Student.id == student_id, Class.school_id == school.id)
-             .first())
-    if not stu:
-        raise HTTPException(status_code=404, detail="Student not found in your school.")
+    per-subject marks + task completion and class/grade/school ranks.
+
+    Leadership roles keep the school-wide lookup; everyone else goes through
+    the object-level guard so a class teacher can open report cards for their
+    own class (the v15 CT console) and a parent for their own child — never
+    anyone else's."""
+    if user.role in ("principal", "super_admin", "school_admin"):
+        school = _school_of(user, db)
+        stu = (db.query(Student)
+                 .join(Class, Student.class_id == Class.id)
+                 .filter(Student.id == student_id, Class.school_id == school.id)
+                 .first())
+        if not stu:
+            raise HTTPException(status_code=404, detail="Student not found in your school.")
+    else:
+        stu = db.query(Student).filter(Student.id == student_id).first()
+        if not stu:
+            raise HTTPException(status_code=404, detail="Student not found.")
+        assert_student_access(user, stu, db)
     cls = db.query(Class).filter(Class.id == stu.class_id).first()
+    school = db.query(School).filter(School.id == cls.school_id).first()
 
     agg = _term_sums(db, school, student_id=stu.id)
     ts, tn = agg["total"]

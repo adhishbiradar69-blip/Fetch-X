@@ -29,7 +29,11 @@ api.interceptors.response.use(
     // A failed LOGIN attempt must NOT wipe the session or hard-redirect:
     // the user is mid-signin and the page's own error box handles it.
     const isAuthCall = typeof error.config?.url === 'string' && error.config.url.includes('/auth/');
-    if (!isAuthCall && (error.response?.status === 401 || error.response?.status === 403)) {
+    // 401 = the session is truly dead → wipe and re-auth.
+    // 403 = authenticated but not allowed → the page's inline error state
+    // handles it; destroying the session here used to log class teachers
+    // out of the console whenever a leadership-only endpoint was hit.
+    if (!isAuthCall && error.response?.status === 401) {
       try {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
