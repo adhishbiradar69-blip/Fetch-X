@@ -11,6 +11,8 @@ env/
 frontend/dist/
 backend/school.db
 backend/school.db-journal
+backend/school.db-shm
+backend/school.db-wal
 
 # Environment
 .env
@@ -41,3 +43,4 @@ frontend.log
 *.zip
 screenshots/
 shots/
+.zcode/
