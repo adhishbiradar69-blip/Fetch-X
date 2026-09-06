@@ -2,6 +2,7 @@
 import json
 import statistics
 import threading
+import os
 import time as _time
 from collections import defaultdict
 from datetime import date, timedelta
@@ -55,7 +56,7 @@ def _gather_all_schools_data(db: Session, schools: list[School]) -> dict:
 
 # ── tiny in-process TTL cache (stack policy: local memory caching only) ──────
 _GATHER_CACHE: dict[tuple, tuple] = {}
-_GATHER_TTL = 120.0  # seconds — seeded demo data is effectively static
+_GATHER_TTL = float(os.environ.get("CHAIRPERSON_CACHE_TTL", "600"))  # seconds — the multi-school scan is expensive; demo data is static
 # Single-flight support: when several chairperson pages load in parallel on a
 # cold cache, each request used to compute its OWN copy of the multi-school
 # aggregation simultaneously — 4-5 concurrent pure-Python scans contending on

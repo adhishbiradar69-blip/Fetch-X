@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import engine, Base, SessionLocal, ensure_unique_indexes
 from app.models import user, user_school, school, class_, student, attendance, task, mark, subject, grade_subject, exam, teacher_assignment
+from app.models.school import School
 from app.routers import auth, admin, attendance, tasks, academics, principal, chairperson, parent, timetable, ct
 from app.rate_limit import limiter
 from slowapi import _rate_limit_exceeded_handler
@@ -113,6 +114,31 @@ app.include_router(chairperson.router)
 app.include_router(parent.router)
 app.include_router(timetable.router)
 app.include_router(ct.router)
+
+
+# Warm the chairperson's multi-school aggregation cache in the background so
+# the first dashboard visit doesn't eat a ~15-20 s cold computation.
+def _warm_chairperson_cache() -> None:
+    import threading
+
+    def _run():
+        try:
+            from app.routers.chairperson import _gather_all_schools_data_cached
+            _db: Session = SessionLocal()
+            try:
+                schools = _db.query(School).order_by(School.id).all()
+                if schools:
+                    _gather_all_schools_data_cached(_db, schools)
+                    print(f"[warm] chairperson cache warmed for {len(schools)} school(s)")
+            finally:
+                _db.close()
+        except Exception as exc:  # never block startup on a warm-up
+            print(f"[warn] chairperson cache warm-up skipped: {exc}")
+
+    threading.Thread(target=_run, name="chairperson-cache-warmup", daemon=True).start()
+
+
+_warm_chairperson_cache()
 
 
 @app.exception_handler(Exception)
