@@ -30,7 +30,9 @@ from app.services.ai_service import ask_ai, ask_ai_agentic
 from app.services.ai_tools import TOOLS as PRINCIPAL_TOOLS
 
 router = APIRouter(prefix="/principal", tags=["principal"])
-_allowed = require_role("principal", "super_admin", "school_admin")
+# vice_principal shares the principal's school-scoped read surface (same
+# dashboard data); the VCP's own AI lives on /vice-principal/ai/analyze.
+_allowed = require_role("principal", "vice_principal", "super_admin", "school_admin")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

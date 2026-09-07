@@ -11,8 +11,11 @@
    ============================================================ */
 
 /* ---- page shell ------------------------------------------------ */
-.v15-root { display: flex; height: 100vh; min-height: 480px; background: var(--page); }
-.v15-main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 24px 26px 34px; }
+/* overflow:hidden pins the shell to the viewport: without it a tall
+   sidebar (dual-mode accounts carry 3 nav groups) escapes the 100vh root
+   and makes the BODY scroll, shifting the whole app under the fold. */
+.v15-root { display: flex; height: 100vh; min-height: 480px; background: var(--page); overflow: hidden; }
+.v15-main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 24px 26px 34px; }
 .v15-main::-webkit-scrollbar { width: 10px; }
 .v15-main::-webkit-scrollbar-track { background: transparent; }
 .v15-main::-webkit-scrollbar-thumb { background: var(--grip); border-radius: 8px; }
@@ -23,9 +26,10 @@
   width: 178px; flex-shrink: 0; border-right: 1px solid var(--line);
   padding: 16px 12px; display: flex; flex-direction: column; gap: 16px;
   background: var(--page); transition: width .25s, padding .25s;
+  min-height: 0; overflow: hidden;
 }
 .v15-root.nav-collapsed .dsb { width: 58px; padding: 16px 8px; }
-.dsb-brand { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.dsb-brand { display: flex; align-items: center; gap: 8px; padding: 0 4px; flex-shrink: 0; }
 .v15-root.nav-collapsed .dsb-brand { justify-content: center; padding: 0; gap: 0; }
 .dsb-brand .bx {
   width: 34px; height: 34px; flex-shrink: 0; border-radius: 11px; display: grid; place-items: center;
@@ -59,7 +63,12 @@ body.dark .dsb-brand .nm b { background: linear-gradient(90deg, #8b7cf6, #b7acff
   transition: max-width .25s, opacity .15s;
 }
 .v15-root.nav-collapsed .dsb-glabel { max-width: 0; opacity: 0; padding-left: 0; padding-right: 0; }
-.dsb-nav { display: flex; flex-direction: column; gap: 6px; }
+/* the nav is the sidebar's internal scroller (same pattern as .sb-nav):
+   brand + footer stay pinned, long group stacks scroll in the middle */
+.dsb-nav { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 2px; margin: -2px; }
+.dsb-nav::-webkit-scrollbar { width: 8px; }
+.dsb-nav::-webkit-scrollbar-track { background: transparent; }
+.dsb-nav::-webkit-scrollbar-thumb { background: var(--grip); border-radius: 8px; }
 .dsb-nav a, .dsb-nav button {
   position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
   padding: 10px 11px; border-radius: 10px; border: none; background: transparent;
@@ -81,7 +90,7 @@ body.dark .dsb-brand .nm b { background: linear-gradient(90deg, #8b7cf6, #b7acff
   transition: opacity .15s; z-index: 60;
 }
 .v15-root.nav-collapsed .dsb-nav a:hover::after, .v15-root.nav-collapsed .dsb-nav button:hover::after { opacity: 1; }
-.dsb-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+.dsb-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
 .dsb-sout {
   display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 10px;
   border: 1px solid var(--line); background: var(--surf); color: var(--muted);

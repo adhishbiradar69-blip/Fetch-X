@@ -93,6 +93,7 @@ PASSWORDS = {
     "principal": "principal123",
     "parent": "parent123",
     "chairperson": "chair123",
+    "vice_principal": "vp123",
 }
 
 # Same 30 teacher names as routers/admin.py so HOD names stay stable
@@ -267,12 +268,17 @@ def _ensure_school_accounts(db, school: School) -> dict:
         db, f"parent@{prefix}.test", PASSWORDS["parent"],
         f"Parent ({school.name})", "parent", None,
     )
+    vp, vp_created = _ensure_user(
+        db, f"vp@{prefix}.test", PASSWORDS["vice_principal"],
+        f"Vice Principal {school.name}", "vice_principal", school.id,
+    )
     return {
         "teachers": teachers,
         "school_admin": school_admin,
         "principal": principal,
         "parent": parent,
-        "created": teacher_created + sa_created + pr_created + pa_created,
+        "vice_principal": vp,
+        "created": teacher_created + sa_created + pr_created + pa_created + vp_created,
     }
 
 

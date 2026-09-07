@@ -9,7 +9,7 @@
      ctTeach  Teaching Classes    → /ct/teaching-classes
      ctMy     My Report           → /ct/teacher-report (via report modal)
      ctTT     Timetable           → /timetable/teacher/{me} (NEW backend) */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Menu, Moon, Sun } from 'lucide-react';
@@ -41,9 +41,6 @@ function CTAttendance({ cls }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(false);
 
-  const load = useCallback((rows = null) => {
-    if (rows !== null) setRows(rows);
-  }, []);
   useEffect(() => {
     let alive = true;
     api.get(`/attendance/class/${cls.id}`, { params: { date } })
@@ -55,7 +52,11 @@ function CTAttendance({ cls }) {
   const save = async (marks) => {
     try {
       await api.post('/attendance/mark', { class_id: cls.id, date, marks });
-      load();
+      // refetch so the tapped pill and the P/A/L counters reflect the save
+      // (the old load() callback was a no-op and the register never updated)
+      const r = await api.get(`/attendance/class/${cls.id}`, { params: { date } });
+      setRows(r.data.students || []);
+      setErr(false);
     } catch { setErr(true); }
   };
   const cycle = (s) => {
@@ -565,6 +566,15 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
   const [showMyReport, setShowMyReport] = useState(false);
   const [toast, setToast] = useState(null);
 
+  /* the workspace owns the scrolling <main> in BOTH embeds (standalone
+     console + principal-dashboard dual mode, where the shell's mainRef is
+     null) — so it must reset the scroll itself when the page switches,
+     or e.g. Attendance opens mid-scrolled with its header above the fold */
+  const mainRef = useRef(null);
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [page]);
+
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') {
@@ -587,7 +597,7 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
   const teacher = me.teacher;
 
   return (
-    <main className="v15-main pd-main">
+    <main className="v15-main pd-main" ref={mainRef}>
       <header className="pagehead">
         <div>
           <div className="eyebrow">Fetch-X · Class Teacher</div>

@@ -7,6 +7,7 @@ const ROLE_HOME = {
   super_admin: '/principal/dashboard',
   school_admin: '/principal/dashboard',
   principal: '/principal/dashboard',
+  vice_principal: '/principal/dashboard', // school-scoped like the principal; gets the VCP AI persona
   chairperson: '/chairperson/dashboard',
   parent: '/parent/view',
   /* v15: class teachers get the designed console (attendance, tasks, marks,

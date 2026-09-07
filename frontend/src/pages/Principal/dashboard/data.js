@@ -123,6 +123,17 @@ export const fetchTeacherReport = (id) => get(`/principal/teacher-report/${id}`)
 export const analyze = (question, history = []) =>
   api.post('/principal/ai/analyze', { question, history }).then((r) => r.data);
 
+/* Persona-aware analyze — same contract, different brain + endpoint:
+   'principal' → /principal/ai/analyze (Fetch-X AI), 'vcp' → the VCP AI. */
+const AI_ENDPOINTS = {
+  principal: '/principal/ai/analyze',
+  vcp: '/vice-principal/ai/analyze',
+};
+
+export const analyzeAs = (persona, question, history = []) =>
+  api.post(AI_ENDPOINTS[persona] || AI_ENDPOINTS.principal, { question, history })
+    .then((r) => r.data);
+
 /* ───────────────────────── v15 designer update ───────────────────────── */
 
 /* GET /principal/subject-detail/{id} — subject page (v15) */

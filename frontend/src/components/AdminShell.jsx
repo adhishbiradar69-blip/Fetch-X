@@ -3,7 +3,7 @@
    dashboard, so the sidebar never switches identity mid-navigation (the
    old two-chrome glitch). Principal-level links jump back to the v15
    dashboard; the ADMINISTRATION group highlights the current page. */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Moon, Sun } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
@@ -37,6 +37,14 @@ export default function AdminShell({ adminKey, children }) {
     return () => { alive = false; };
   }, []);
 
+  /* The shell (and its scrolling .v15-main) is REUSED across the /admin/*
+     routes, so a scroll from e.g. Students would leave Accounts opening
+     mid-page with its header above the fold — reset per admin page. */
+  const mainRef = useRef(null);
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [adminKey]);
+
   const signOut = () => { logout(); navigate('/'); };
   const navGo = (key) => {
     setMobNav(false);
@@ -61,7 +69,7 @@ export default function AdminShell({ adminKey, children }) {
         adminActive={adminKey}
         savedHidden
       />
-      <main className="v15-main pd-main" style={{ position: 'relative' }}>
+      <main className="v15-main pd-main" ref={mainRef} style={{ position: 'relative' }}>
         {/* theme toggle — the old chrome had one; the v15 shell must too */}
         <div style={{ position: 'absolute', top: 2, right: 0, zIndex: 5 }}>
           <button

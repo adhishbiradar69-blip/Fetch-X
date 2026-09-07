@@ -11,7 +11,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   BookOpen, Bookmark, Briefcase, ChevronRight, GraduationCap, Home, LogOut,
-  Presentation, Users,
+  Presentation, Sparkles, Users,
 } from 'lucide-react';
 
 const ICONS = {
@@ -20,6 +20,7 @@ const ICONS = {
   classSec: GraduationCap,
   studentSec: Users,
   teacherSec: Presentation,
+  aiSec: Sparkles,
   ctHome: GraduationCap,
   ctAtt: BookOpen,
   ctTask: BookOpen,
@@ -29,7 +30,7 @@ const ICONS = {
   ctTT: BookOpen,
 };
 
-const LVL_OF = { schoolSec: 1, subjectSec: 2, classSec: 3, studentSec: 4, teacherSec: 6, saved: 5 };
+const LVL_OF = { schoolSec: 1, subjectSec: 2, classSec: 3, studentSec: 4, teacherSec: 6, saved: 5, aiSec: 7 };
 const LVL_CT = { ctHome: 3, ctAtt: 2, ctTask: 2, ctMarks: 3, ctTeach: 2, ctMy: 6, ctTT: 2 };
 
 const P_LINKS = [
@@ -38,6 +39,7 @@ const P_LINKS = [
   ['classSec', 'Class Level'],
   ['studentSec', 'Students Level'],
   ['teacherSec', 'Teachers Level'],
+  ['aiSec', 'AI Analyst'],
 ];
 const CT_LINKS = [
   ['ctHome', 'My Class'],

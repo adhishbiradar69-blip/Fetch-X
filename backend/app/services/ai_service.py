@@ -232,6 +232,39 @@ def _canned_fallback(question: str, data_context) -> str:
     return "\n".join(lines)
 
 
+def _fallback_from_tools(question: str, tool_log: list[tuple[str, str]]) -> str:
+    """Last-resort answer when the LLM is unreachable AFTER tools ran.
+
+    The tool results are real school data, so the fallback keeps the useful
+    parts: any ```chart / ```table block is preserved verbatim (the UI
+    renders it) and the most recent tool outputs are shown as a digest.
+    """
+    lines = [
+        "## ⚠️ AI service unavailable — showing the data gathered by your tools",
+        "",
+        f"**Question:** {question}",
+        "",
+    ]
+    # Preserve every renderable block the tools produced.
+    for name, result in tool_log:
+        for kind in ("chart", "table"):
+            if f"```{kind}" in result:
+                block = result[result.index(f"```{kind}"):]
+                end = block.find("```", len(f"```{kind}"))
+                if end > 0:
+                    lines.append(block[:end + 3])
+                    lines.append("")
+    # Digest of the raw tool outputs (most recent last, trimmed).
+    for name, result in tool_log[-3:]:
+        lines.append(f"### {name}")
+        lines.append("```")
+        lines.append(result[:1400])
+        lines.append("```")
+        lines.append("")
+    lines.append("_The AI service could not be reached, so this answer shows the raw tool results instead of a written analysis._")
+    return "\n".join(lines)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENTIC LOOP — tool-calling wrapper
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,7 +289,12 @@ REASONING_PROTOCOL = """
 5. VISUALS: when a tool returns a ```chart block, include it VERBATIM in
    your answer — the UI renders real graphs from it. Use a chart whenever
    the answer is quantitative (trends, comparisons, distributions), and
-   explain what the chart shows in one sentence next to it.
+   explain what the chart shows in one sentence next to it. When a tool
+   returns a ```table block, include it VERBATIM too — the UI renders it
+   as a real data grid. For any other tabular comparison (rankings,
+   side-by-sides, multi-metric lists) build a markdown TABLE with | pipes
+   and a |---| separator row — the UI renders markdown tables as styled
+   grids, which beat comma-choked bullet lines.
 6. If tools fail twice for the same fact, answer with what you have and say
    which data was unavailable — never guess.
 """
@@ -391,22 +429,25 @@ async def _call_groq_with_tools(
         body["tool_choice"] = "auto"
     async with httpx.AsyncClient(timeout=GROQ_TOOL_CALL_TIMEOUT) as client:
         for model in (GROQ_PRIMARY_MODEL, GROQ_FALLBACK_MODEL):
-            try:
-                resp = await client.post(
-                    GROQ_URL,
-                    headers=headers,
-                    json={**body, "model": model},
-                )
-                if resp.status_code != 200:
+            # one immediate retry per model — Groq occasionally 5xx's a
+            # single request mid-loop and a retry recovers it
+            for attempt in (0, 1):
+                try:
+                    resp = await client.post(
+                        GROQ_URL,
+                        headers=headers,
+                        json={**body, "model": model},
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    payload = resp.json()
+                    choices = payload.get("choices") or []
+                    if not choices:
+                        continue
+                    msg = choices[0].get("message") or {}
+                    return msg
+                except Exception:
                     continue
-                payload = resp.json()
-                choices = payload.get("choices") or []
-                if not choices:
-                    continue
-                msg = choices[0].get("message") or {}
-                return msg
-            except Exception:
-                continue
     return None
 
 
@@ -468,6 +509,7 @@ async def ask_ai_agentic(
     """
     ctx = ctx or {}
     tools_used: list[str] = []
+    tool_log: list[tuple[str, str]] = []  # (tool, raw output) for the fallback
 
     # Build the agentic system prompt: base role + protocol + tool list + context.
     full_system = system_prompt.strip() + "\n\n" + REASONING_PROTOCOL + "\n\n" + _build_tool_list_section(tools)
@@ -522,6 +564,7 @@ async def ask_ai_agentic(
                 tool_name, args = parsed
                 result = _execute_tool(tool_name, args, tools, db, ctx)
                 tools_used.append(tool_name)
+                tool_log.append((tool_name, result))
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": f"Tool {tool_name} result:\n{result}"})
                 continue
@@ -540,6 +583,7 @@ async def ask_ai_agentic(
                     args = {}
                 result = _execute_tool(tool_name, args, tools, db, ctx)
                 tools_used.append(tool_name)
+                tool_log.append((tool_name, result))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
@@ -554,9 +598,8 @@ async def ask_ai_agentic(
         if text is None:
             # Truly nothing we can do — return what we have.
             return {
-                "answer": _canned_fallback(question, None) +
-                          ("\n\n(Tool calls made: " + ", ".join(tools_used) + ".)"
-                           if tools_used else ""),
+                "answer": (_fallback_from_tools(question, tool_log)
+                           if tool_log else _canned_fallback(question, None)),
                 "source": "fallback",
                 "tools_used": tools_used,
             }
@@ -571,6 +614,7 @@ async def ask_ai_agentic(
         tool_name, args = parsed
         result = _execute_tool(tool_name, args, tools, db, ctx)
         tools_used.append(tool_name)
+        tool_log.append((tool_name, result))
         # Append the assistant's tool call (so the model sees what it asked)
         # and the tool result (so it can answer).
         messages.append({"role": "assistant", "content": text})
@@ -607,7 +651,8 @@ async def ask_ai_agentic(
             "tools_used": tools_used,
         }
     return {
-        "answer": _canned_fallback(question, None),
+        "answer": (_fallback_from_tools(question, tool_log)
+                   if tool_log else _canned_fallback(question, None)),
         "source": "fallback",
         "tools_used": tools_used,
     }

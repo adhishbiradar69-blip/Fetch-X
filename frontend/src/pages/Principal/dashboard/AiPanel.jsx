@@ -1,15 +1,19 @@
 /* Resizable AI right panel — the prototype's shell with a REAL backend:
    suggestion chips submit, the input sends, answers are rendered as
-   markdown with source / tools_used badges, ```chart blocks render real
-   in-theme graphs, and failures get a graceful error card. Conversation
-   memory: recent turns ride along so follow-up questions work.
-   Wired to POST /principal/ai/analyze. */
-import { useEffect, useRef, useState } from 'react';
-import { ChevronRight, SendHorizontal, TrendingUp, Trophy, User } from 'lucide-react';
-import { analyze } from './data';
+   markdown (now including real TABLES — both markdown tables and the
+   backend's ```table blocks), ```chart blocks render real in-theme graphs,
+   and failures get a graceful error card.
+
+   The conversation lives in the shared aiThread store, so it carries over
+   intact between this side panel and the dedicated full AI page
+   (#ai view) — when the thread gets long, an inline chip offers the jump.
+   Personas: 'principal' (Fetch-X AI) and 'vcp' (VCP AI, operations). */
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { ChevronRight, Maximize2, SendHorizontal, TrendingUp, Trophy, User } from 'lucide-react';
 import { prefersReducedMotion } from './util';
 import { SchoolLogo } from './DashSidebar';
 import { BarChart, Distro, LineChart } from './charts';
+import { AI_PERSONAS, aiAsk, aiRetry, getAiSnapshot, subscribeAi } from './aiThread';
 
 /* ---------- AI chart blocks — render the backend's chart payloads ------ */
 export function AiChart({ spec }) {
@@ -44,7 +48,35 @@ export function AiChart({ spec }) {
   );
 }
 
-/* ---------- markdown renderer (ported from the legacy dashboard) ------ */
+/* ---------- AI table blocks — the backend's ```table payloads ---------- */
+/* spec: { title, rows: [{col: val, ...}, ...] } — column order comes from
+   the first row's keys. Rendered with the design kit's own CSS vars so it
+   follows light/dark automatically. */
+export function AiTable({ spec }) {
+  if (!spec || !Array.isArray(spec.rows) || !spec.rows.length) return null;
+  const cols = Object.keys(spec.rows[0]);
+  return (
+    <div className="card" style={{ margin: '10px 0', overflow: 'hidden' }}>
+      {spec.title
+        ? <div className="label" style={{ padding: '10px 14px 2px', fontSize: 9, fontWeight: 800, letterSpacing: '.09em', color: 'var(--muted)' }}>{spec.title}</div>
+        : null}
+      <div style={{ padding: '2px 14px 12px', overflowX: 'auto' }}>
+        <table className="ai-table">
+          <thead>
+            <tr>{cols.map((c) => <th key={c}>{c}</th>)}</tr>
+          </thead>
+          <tbody>
+            {spec.rows.map((r, i) => (
+              <tr key={i}>{cols.map((c) => <td key={c}>{r[c] ?? '—'}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- markdown renderer (tables + charts + code fences) ---------- */
 function inline(text) {
   const parts = [];
   let rest = text;
@@ -64,6 +96,25 @@ function inline(text) {
   return parts;
 }
 
+/* markdown table cells: | a | b | (with a |---|---| separator row) */
+const isPipeRow = (t) => t.startsWith('|') && t.endsWith('|');
+const isSepRow = (t) => /^\|?[\s:|-]+\|?$/.test(t) && t.includes('-');
+const splitRow = (t) => t.slice(1, -1).split('|').map((c) => c.trim());
+
+function MdTable({ rows }) {
+  const [head, ...body] = rows;
+  return (
+    <div style={{ overflowX: 'auto', margin: '8px 0' }}>
+      <table className="ai-table">
+        <thead><tr>{head.map((c, i) => <th key={i}>{inline(c)}</th>)}</tr></thead>
+        <tbody>
+          {body.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{inline(c)}</td>)}</tr>)}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function MarkdownLite({ text }) {
   if (!text) return null;
   const lines = String(text).split('\n');
@@ -77,36 +128,45 @@ export function MarkdownLite({ text }) {
       lt = null;
     }
   };
-  /* fenced blocks: ```chart → real graph, any other fence → pre */
-  let fence = null; // null | { lang, lines: [] }
-  lines.forEach((line, i) => {
-    if (fence) {
-      if (line.trim().startsWith('```')) {
-        if (fence.lang === 'chart') {
-          try {
-            out.push(<AiChart key={`c${i}`} spec={JSON.parse(fence.lines.join('\n'))} />);
-          } catch { /* ignore malformed chart JSON */ }
-        } else {
-          out.push(
-            <pre key={`f${i}`} style={{
-              background: 'var(--chip)', borderRadius: 10, padding: '10px 12px',
-              fontSize: 11, overflowX: 'auto', margin: '8px 0',
-            }}>{fence.lines.join('\n')}</pre>,
-          );
-        }
-        fence = null;
-      } else {
-        fence.lines.push(line);
-      }
-      return;
-    }
-    const t = line.trim();
-    if (t.startsWith('```')) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    /* --- fenced blocks: ```chart → graph, ```table → grid, else pre --- */
+    if (line.trim().startsWith('```')) {
       flush();
-      fence = { lang: t.slice(3).trim().toLowerCase(), lines: [] };
-      return;
+      const lang = line.trim().slice(3).trim().toLowerCase();
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
+      if (lang === 'chart' || lang === 'table') {
+        let spec = null;
+        try { spec = JSON.parse(buf.join('\n')); } catch { /* malformed */ }
+        if (spec) {
+          out.push(lang === 'chart'
+            ? <AiChart key={`c${i}`} spec={spec} />
+            : <AiTable key={`t${i}`} spec={spec} />);
+        }
+      } else {
+        out.push(
+          <pre key={`f${i}`} style={{
+            background: 'var(--chip)', borderRadius: 10, padding: '10px 12px',
+            fontSize: 11, overflowX: 'auto', margin: '8px 0',
+          }}>{buf.join('\n')}</pre>,
+        );
+      }
+      continue;
     }
-    if (!t) { flush(); return; }
+    /* --- markdown tables (| a | b | + separator) ----------------------- */
+    const t = line.trim();
+    if (isPipeRow(t) && i + 1 < lines.length && isSepRow(lines[i + 1].trim())) {
+      flush();
+      const rows = [splitRow(t)];
+      i += 2; // skip the separator
+      while (i < lines.length && isPipeRow(lines[i].trim())) { rows.push(splitRow(lines[i].trim())); i++; }
+      i--;
+      out.push(<MdTable key={`mt${i}`} rows={rows} />);
+      continue;
+    }
+    if (!t) { flush(); continue; }
     if (t.startsWith('### ') || t.startsWith('## ') || t.startsWith('# ')) {
       flush();
       out.push(<h3 key={i}>{inline(t.replace(/^#+\s/, ''))}</h3>);
@@ -116,35 +176,101 @@ export function MarkdownLite({ text }) {
     } else if (/^\d+\.\s/.test(t)) {
       if (lt !== 'ol') { flush(); lt = 'ol'; }
       li.push(<li key={i}>{inline(t.replace(/^\d+\.\s/, ''))}</li>);
+    } else if (/^(---|___|\*\*\*)$/.test(t)) {
+      flush();
+      out.push(<hr key={i} style={{ border: 'none', borderTop: '1px solid var(--line)', margin: '10px 0' }} />);
     } else {
       flush();
       out.push(<p key={i}>{inline(t)}</p>);
     }
-  });
+  }
   flush();
   return <>{out}</>;
 }
 
+/* ---------- shared message list (side panel + full page both use it) --- */
+export function AiMessageList({ msgs, loading, persona, endRef }) {
+  return (
+    <>
+      {msgs.map((m, i) => {
+        if (m.role === 'user') return <div className="ai-msg user" key={i}>{m.content}</div>;
+        if (m.role === 'error') {
+          /* 403 means "not your role", not "backend down" — a retry
+             can never succeed, so it's hidden. */
+          const forbidden = m.status === 403;
+          return (
+            <div className="ai-err" key={i}>
+              <span>{forbidden
+                ? 'AI insights are available to principal, vice-principal and admin accounts.'
+                : 'The AI could not be reached. Check that the backend is running, then retry.'}</span>
+              {!forbidden && <button type="button" onClick={() => aiRetry(persona)}>RETRY</button>}
+            </div>
+          );
+        }
+        return (
+          <div className="ai-msg bot" key={i}>
+            <MarkdownLite text={m.content} />
+            {(m.source || m.tools?.length > 0) && (
+              <div className="ai-badges">
+                {m.source && <span className="ai-badge">{m.source}</span>}
+                {m.tools.map((t) => <span className="ai-badge tools" key={t}>{t}</span>)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {loading && (
+        <div className="ai-msg bot">
+          <div className="ai-thinking">
+            <div className="ai-wave">
+              {[0, 1, 2, 3, 4].map((i) => <span key={i} style={{ animation: `aiWave 1s ease-in-out ${i * 0.12}s infinite` }} />)}
+            </div>
+            <span className="ai-thinking-text">Analysing with tools…</span>
+          </div>
+        </div>
+      )}
+      <div ref={endRef} />
+    </>
+  );
+}
+
 /* --------------------------------------------------------------------- */
-const SUGGESTIONS = [
-  { icon: User, text: 'Students needing attention' },
-  { icon: Trophy, text: 'Top performers' },
-  { icon: TrendingUp, text: 'Find patterns' },
-];
+const SUGGESTIONS = {
+  principal: [
+    { icon: User, text: 'Students needing attention' },
+    { icon: Trophy, text: 'Top performers' },
+    { icon: TrendingUp, text: 'Find patterns' },
+  ],
+  vcp: [
+    { icon: User, text: 'Who was absent on the most recent marked day?' },
+    { icon: TrendingUp, text: 'Which classes have the most pending homework?' },
+    { icon: Trophy, text: 'Show teacher coverage gaps' },
+  ],
+};
+
+/* the thread is "long" once it holds this many messages → offer the page */
+const LONG_THREAD_AT = 8;
 
 const MIN_W = 210;
 const MAX_W = 440;
 const DEF_W = 238;
 
-export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the entire school' }) {
-  const [msgs, setMsgs] = useState([]);
+export default function AiPanel({
+  collapsed, onToggle, onExpand,
+  persona = 'principal',
+  subtitle,
+}) {
+  const personaCfg = AI_PERSONAS[persona] || AI_PERSONAS.principal;
+  const snap = useSyncExternalStore(subscribeAi, () => getAiSnapshot(persona));
+  const msgs = snap.msgs;
+  const loading = snap.loading;
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
   const orbRef = useRef(null);
   const msgsEndRef = useRef(null);
   const inputRef = useRef(null);
   const handleRef = useRef(null);
   const dragRef = useRef(null);
+  const sub = subtitle || personaCfg.subtitle;
 
   useEffect(() => {
     msgsEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -189,45 +315,23 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
     } catch { /* ignore */ }
   }, []);
 
-  /* ---- the real AI call (with conversation memory) ---- */
-  const ask = async (q) => {
+  const ask = (q) => {
     const question = (q ?? input).trim();
     if (!question || loading) return;
-    /* last few real turns ride along so follow-ups ("now compare the bottom
-       two") keep their context */
-    const history = msgs
-      .filter((m) => m.role === 'user' || m.role === 'bot')
-      .slice(-6)
-      .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }));
     setInput('');
-    setMsgs((m) => [...m, { role: 'user', content: question }]);
-    setLoading(true);
     if (!prefersReducedMotion()) {
       orbRef.current?.animate?.(
         [{ transform: 'scale(1)' }, { transform: 'scale(1.12)' }, { transform: 'scale(1)' }],
         { duration: 400, easing: 'ease' },
       );
     }
-    try {
-      const res = await analyze(question, history);
-      setMsgs((m) => [...m, {
-        role: 'bot',
-        content: res.answer,
-        source: res.source,
-        tools: res.tools_used || [],
-      }]);
-    } catch (err) {
-      setMsgs((m) => [...m, { role: 'error', question, status: err?.response?.status }]);
-    } finally {
-      setLoading(false);
-      inputRef.current?.focus();
-    }
+    aiAsk(question, persona);
+    inputRef.current?.focus();
   };
 
-  const retry = (question) => {
-    setMsgs((m) => m.filter((x) => x.role !== 'error'));
-    ask(question);
-  };
+  /* only offer the full page where one exists (the dashboard passes
+     onExpand; the standalone CT console doesn't) */
+  const longThread = msgs.length >= LONG_THREAD_AT && !!onExpand;
 
   return (
     <>
@@ -246,7 +350,15 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
       <aside className="rightbar">
         <div className="rightpanel">
           <div className="rb-top">
-            <span className="rb-eyebrow">FETCH-X AI</span>
+            <span className="rb-eyebrow">{personaCfg.eyebrow}</span>
+            {onExpand && (
+              <button
+                type="button" className="rb-collapse" onClick={onExpand}
+                title="Open the full AI page" aria-label="Open the full AI page"
+              >
+                <Maximize2 strokeWidth={2.2} />
+              </button>
+            )}
             <button type="button" className="rb-collapse" onClick={onToggle} aria-label="Collapse AI panel">
               <ChevronRight strokeWidth={2.2} />
             </button>
@@ -255,51 +367,14 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
           <div className="ai-card">
             <div className="ai-avatar"><SchoolLogo /></div>
             <div>
-              <div className="t">Fetch-X AI</div>
-              <div className="s">{subtitle}</div>
+              <div className="t">{personaCfg.name}</div>
+              <div className="s">{sub}</div>
             </div>
           </div>
 
           {msgs.length || loading ? (
             <div className="ai-msgs">
-              {msgs.map((m, i) => {
-                if (m.role === 'user') return <div className="ai-msg user" key={i}>{m.content}</div>;
-                if (m.role === 'error') {
-                  /* 403 means "not your role", not "backend down" — a retry
-                     can never succeed, so it's hidden. */
-                  const forbidden = m.status === 403;
-                  return (
-                    <div className="ai-err" key={i}>
-                      <span>{forbidden
-                        ? 'AI insights are available to principal and admin accounts.'
-                        : 'The AI could not be reached. Check that the backend is running, then retry.'}</span>
-                      {!forbidden && <button type="button" onClick={() => retry(m.question)}>RETRY</button>}
-                    </div>
-                  );
-                }
-                return (
-                  <div className="ai-msg bot" key={i}>
-                    <MarkdownLite text={m.content} />
-                    {(m.source || m.tools?.length > 0) && (
-                      <div className="ai-badges">
-                        {m.source && <span className="ai-badge">{m.source}</span>}
-                        {m.tools.map((t) => <span className="ai-badge tools" key={t}>{t}</span>)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {loading && (
-                <div className="ai-msg bot">
-                  <div className="ai-thinking">
-                    <div className="ai-wave">
-                      {[0, 1, 2, 3, 4].map((i) => <span key={i} style={{ animation: `aiWave 1s ease-in-out ${i * 0.12}s infinite` }} />)}
-                    </div>
-                    <span className="ai-thinking-text">Analysing with tools…</span>
-                  </div>
-                </div>
-              )}
-              <div ref={msgsEndRef} />
+              <AiMessageList msgs={msgs} loading={loading} persona={persona} endRef={msgsEndRef} />
             </div>
           ) : (
             <>
@@ -315,11 +390,11 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
                     <SchoolLogo />
                   </span>
                 </div>
-                <h3>Ask Fetch-X AI</h3>
-                <p>Ask questions about performance, attendance, task completion, rankings, or patterns.</p>
+                <h3>Ask {personaCfg.name}</h3>
+                <p>{personaCfg.blurb}</p>
               </div>
               <div className="suggestions">
-                {SUGGESTIONS.map((s) => (
+                {SUGGESTIONS[persona]?.map((s) => (
                   <button key={s.text} type="button" className="sugg" onClick={() => ask(s.text)}>
                     <s.icon strokeWidth={1.8} />
                     {s.text}
@@ -327,6 +402,13 @@ export default function AiPanel({ collapsed, onToggle, subtitle = 'Analysing the
                 ))}
               </div>
             </>
+          )}
+
+          {longThread && (
+            <button type="button" className="ai-expand-chip" onClick={onExpand}>
+              <Maximize2 strokeWidth={2} />
+              Long conversation — open the full AI page
+            </button>
           )}
 
           <div className="ask-input">

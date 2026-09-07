@@ -102,7 +102,7 @@ function AnimatedRoutes() {
 
       {/* v15 full-page consoles (own chrome — no Layout shell) */}
       <Route path="/principal/dashboard" element={
-        <ProtectedRoute bare roles={['principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
+        <ProtectedRoute bare roles={['principal', 'vice_principal', ...A]}><PrincipalDashboard /></ProtectedRoute>} />
       <Route path="/teacher/console" element={
         <ProtectedRoute bare roles={['class_teacher', ...A]}><CTConsole /></ProtectedRoute>} />
       {/* legacy teacher URLs — always forward to the role home */}

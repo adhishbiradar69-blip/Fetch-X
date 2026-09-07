@@ -1130,6 +1130,469 @@ def func_present():
     return func.sum(case((Attendance.status == "P", 1), else_=0))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# v3 tools — day-to-day operations (what a principal asks every morning)
+# ─────────────────────────────────────────────────────────────────────────────
+def _latest_attendance_date(db: Session, school: School):
+    """Most recent date on which attendance was marked anywhere in the school.
+    Falls back to today when no rows exist yet."""
+    from sqlalchemy import func
+    from app.models.class_ import Class as _Cls
+    latest = (db.query(func.max(Attendance.date))
+                .join(Student, Attendance.student_id == Student.id)
+                .join(_Cls, Student.class_id == _Cls.id)
+                .filter(_Cls.school_id == school.id)
+                .scalar())
+    return latest
+
+
+def get_today_attendance(db: Session, school: School,
+                         _data: dict | None = None) -> str:
+    """Attendance for the most recently marked day: per-class present/absent/
+    leave counts plus the named absentees, so the principal knows exactly
+    who to follow up with."""
+    from app.models.class_ import Class as _Cls
+    day = _latest_attendance_date(db, school)
+    if not day:
+        return f"No attendance has been marked yet at {school.name}."
+    rows = (db.query(Attendance.student_id, Attendance.status, Student.name,
+                     _Cls.grade, _Cls.section)
+              .join(Student, Attendance.student_id == Student.id)
+              .join(_Cls, Student.class_id == _Cls.id)
+              .filter(_Cls.school_id == school.id, Attendance.date == day)
+              .all())
+    if not rows:
+        return f"No attendance records for {day} at {school.name}."
+    by_class: dict[str, dict] = {}
+    for sid, status, name, grade, section in rows:
+        b = by_class.setdefault(f"{grade}-{section}",
+                                {"P": 0, "A": 0, "L": 0, "absentees": []})
+        b[status] = b.get(status, 0) + 1
+        if status == "A":
+            b["absentees"].append(name)
+    total = {"P": 0, "A": 0, "L": 0}
+    for b in by_class.values():
+        for k in ("P", "A", "L"):
+            total[k] += b[k]
+    marked = sum(total.values())
+    lines = [f"Attendance on {day} ({school.name}) — {marked} marked: "
+             f"{total['P']} present · {total['A']} absent · {total['L']} leave "
+             f"({round(total['P'] / max(marked, 1) * 100, 1)}% present):"]
+    for label in sorted(by_class, key=lambda l: (int(l.split("-")[0]), l)):
+        b = by_class[label]
+        pct = round(b["P"] / max(b["P"] + b["A"] + b["L"], 1) * 100, 1)
+        line = f"- {label}: {b['P']}P / {b['A']}A / {b['L']}L ({pct}% present)"
+        if b["absentees"]:
+            line += f" · absent: {', '.join(b['absentees'][:6])}"
+            if len(b["absentees"]) > 6:
+                line += f" … +{len(b['absentees']) - 6} more"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def get_chronic_absentees(db: Session, school: School, threshold: int = 60,
+                          limit: int = 15, _data: dict | None = None) -> str:
+    """Students whose overall attendance rate is below `threshold`% — the
+    intervention list, worst first."""
+    try:
+        threshold = max(0, min(int(threshold), 100))
+    except (TypeError, ValueError):
+        threshold = 60
+    try:
+        limit = max(1, min(int(limit), 40))
+    except (TypeError, ValueError):
+        limit = 15
+    data = _school_data(db, school, _data)
+    picked = [st for st in data["_student_stats"].values()
+              if st["attendance_rate"] < threshold]
+    picked.sort(key=lambda x: x["attendance_rate"])
+    if not picked:
+        return (f"No students below {threshold}% attendance at {school.name}. "
+                f"Lowest is "
+                f"{min(data['_student_stats'].values(), key=lambda s: s['attendance_rate'])['attendance_rate']}%.")
+    lines = [f"{len(picked)} students below {threshold}% attendance at "
+             f"{school.name} (worst {min(limit, len(picked))}):"]
+    for st in picked[:limit]:
+        lines.append(
+            f"- {st['name']} ({st['class_label']}) — attendance {st['attendance_rate']}% · "
+            f"avg {st['average']}%")
+    return "\n".join(lines)
+
+
+def get_pending_tasks(db: Session, school: School, limit: int = 15) -> str:
+    """Incomplete homework/tasks per class with due dates and completion %,
+    worst-completing first."""
+    from app.models.class_ import Class as _Cls
+    from app.models.task import Task, TaskCompletion
+    try:
+        limit = max(1, min(int(limit), 40))
+    except (TypeError, ValueError):
+        limit = 15
+    class_objs = db.query(_Cls).filter(_Cls.school_id == school.id).all()
+    if not class_objs:
+        return f"No classes at {school.name}."
+    name_of = {c.id: f"{c.grade}-{c.section}" for c in class_objs}
+    tasks = (db.query(Task)
+               .join(_Cls, Task.class_id == _Cls.id)
+               .filter(_Cls.school_id == school.id)
+               .all())
+    if not tasks:
+        return f"No tasks have been assigned at {school.name}."
+    comp = (db.query(TaskCompletion.task_id, TaskCompletion.status)
+              .join(Task, TaskCompletion.task_id == Task.id)
+              .join(_Cls, Task.class_id == _Cls.id)
+              .filter(_Cls.school_id == school.id)
+              .all())
+    status_by_task: dict[int, dict[str, int]] = {}
+    for tid, st in comp:
+        b = status_by_task.setdefault(tid, {"completed": 0, "pending": 0})
+        b["completed" if st == "completed" else "pending"] += 1
+    rows = []
+    for t in tasks:
+        b = status_by_task.get(t.id, {"completed": 0, "pending": 0})
+        total = b["completed"] + b["pending"]
+        if total == 0:
+            pct, pend = 0, 0  # not marked at all → fully outstanding
+        else:
+            pend = b["pending"]
+            pct = round(b["completed"] / total * 100, 1)
+        rows.append((name_of.get(t.class_id, "?"), t.title,
+                     t.due_date.isoformat() if t.due_date else None,
+                     t.term or 1, b["completed"], pend, pct))
+    rows.sort(key=lambda r: (r[6], r[0]))
+    lines = [f"Tasks with the most pending work at {school.name} "
+             f"(worst first, top {min(limit, len(rows))}):"]
+    for label, title, due, term, done, pend, pct in rows[:limit]:
+        due_s = f" · due {due}" if due else ""
+        lines.append(f"- [{label}] {title} (Term {term}) — {done} done / "
+                     f"{pend} pending ({pct}% complete){due_s}")
+    return "\n".join(lines)
+
+
+def get_exam_calendar(db: Session, school: School, grade: Optional[int] = None,
+                      _data: dict | None = None) -> str:
+    """Exams for the school (optionally one grade) with term, max score,
+    how many marks have been entered, and the average so far."""
+    from app.models.class_ import Class as _Cls
+    from sqlalchemy import func
+    data = _school_data(db, school, _data)
+    if grade is not None:
+        try:
+            grade = int(grade)
+        except (TypeError, ValueError):
+            grade = None
+    exams = [e for e in data["_exam_by_id"].values()
+             if grade is None or e.grade == grade]
+    if not exams:
+        g = f" for grade {grade}" if grade is not None else ""
+        return f"No exams found{g} at {school.name}."
+    stats = dict(
+        db.query(Mark.exam_id, func.count(Mark.id), func.avg(Mark.score))
+          .join(Student, Mark.student_id == Student.id)
+          .join(_Cls, Student.class_id == _Cls.id)
+          .filter(_Cls.school_id == school.id)
+          .group_by(Mark.exam_id).all())
+    def _order(e):
+        t = (e.term or "").replace("Term ", "")
+        try:
+            return (e.grade, int(t))
+        except ValueError:
+            return (e.grade, 99)
+    lines = [f"Exam calendar at {school.name}"
+             + (f", grade {grade}" if grade is not None else "") + ":"]
+    for e in sorted(exams, key=_order):
+        n, avg = stats.get(e.id, (0, None))
+        avg_s = f"{round(float(avg) / max(e.max_score, 1) * 100, 1)}%" if avg is not None else "—"
+        lines.append(
+            f"- Grade {e.grade}: {e.name} (Term {e.term or '?'}, max {e.max_score}) — "
+            f"{n} marks entered · exam average {avg_s}")
+    return "\n".join(lines)
+
+
+def get_teacher_coverage(db: Session, school: School,
+                         _data: dict | None = None) -> str:
+    """Staffing overview: HODs, how many (grade, subject) slots each subject
+    has covered, grade-subjects with NO assigned teacher, and the extra /
+    subject teachers covering activities."""
+    from app.models.extra_teacher import ExtraTeacher
+    from app.models.grade_subject import GradeSubject
+    from app.models.teacher_assignment import TeacherAssignment
+    from app.models.user import User
+    data = _school_data(db, school, _data)
+    sub_by_id = data["_subject_by_id"]
+    assigns = (db.query(TeacherAssignment)
+                 .filter(TeacherAssignment.school_id == school.id)
+                 .all())
+    users = {u.id: u.full_name for u in
+             db.query(User).filter(User.school_id == school.id).all()}
+    hods = [(sub_by_id[a.subject_id].name if sub_by_id.get(a.subject_id) else "?",
+             users.get(a.teacher_user_id, f"#{a.teacher_user_id}"))
+            for a in assigns if a.is_hod and a.class_id is None]
+    cover: dict[int, set[int]] = defaultdict(set)  # subject → grades covered
+    class_grade = {c.id: c.grade for c in data["_classes"]}
+    for a in assigns:
+        if a.class_id is not None and not a.is_hod and a.subject_id:
+            g = class_grade.get(a.class_id)
+            if g is not None:
+                cover[a.subject_id].add(g)
+    gs_rows = db.query(GradeSubject).filter(
+        GradeSubject.school_id == school.id).all()
+    uncovered = [(g.grade, sub_by_id[gs.subject_id].name)
+                 for g in gs_rows
+                 if g.subject_id in sub_by_id
+                 and g.grade not in cover.get(g.subject_id, set())]
+    extras = db.query(ExtraTeacher).filter(
+        ExtraTeacher.school_id == school.id).all()
+    lines = [f"Staffing & subject coverage at {school.name}:"]
+    if hods:
+        lines.append("- HODs: " + "; ".join(f"{t} ({s})" for s, t in sorted(hods)))
+    lines.append("- Teaching coverage per subject: " + ", ".join(
+        f"{sub_by_id[sid].name if sub_by_id.get(sid) else '?'} covers grades "
+        f"{sorted(gset)}" for sid, gset in sorted(cover.items())))
+    if uncovered:
+        lines.append(f"- ⚠ Uncovered (no assigned teacher): " + ", ".join(
+            f"Grade {g} {s}" for g, s in sorted(uncovered)[:12]))
+    else:
+        lines.append("- All configured grade-subjects have an assigned teacher.")
+    if extras:
+        lines.append("- Extra/subject teachers (timetable-only): " + "; ".join(
+            f"{e.name} ({sub_by_id[e.subject_id].name if sub_by_id.get(e.subject_id) else e.activity or 'activity'}, "
+            f"max {e.max_daily}/day)" for e in extras[:10]))
+    return "\n".join(lines)
+
+
+def get_class_size_balance(db: Session, school: School,
+                           _data: dict | None = None) -> str:
+    """Students per section with imbalance flags — for admissions/section
+    rebalancing decisions."""
+    data = _school_data(db, school, _data)
+    rows = sorted(data["_class_rows"], key=lambda c: (c["grade"], c["section"]))
+    if not rows:
+        return f"No classes at {school.name}."
+    lines = [f"Class sizes at {school.name}:"]
+    for c in rows:
+        lines.append(f"- {c['label']}: {c['students']} students")
+    by_grade: dict[int, list[int]] = defaultdict(list)
+    for c in rows:
+        by_grade[c["grade"]].append(c["students"])
+    imbalanced = []
+    for g, sizes in sorted(by_grade.items()):
+        if len(sizes) >= 2 and max(sizes) - min(sizes) >= 4:
+            imbalanced.append(f"Grade {g} spans {min(sizes)}–{max(sizes)}")
+    if imbalanced:
+        lines.append("- ⚠ Uneven sections: " + "; ".join(imbalanced))
+    else:
+        lines.append("- Sections are evenly balanced within each grade.")
+    return "\n".join(lines)
+
+
+def get_exam_result_focus(db: Session, school: School, grade: int,
+                          _data: dict | None = None) -> str:
+    """Most recent exam in one grade: the strongest and weakest students in
+    that exam (percentage of max score), so follow-ups start today."""
+    try:
+        grade = int(grade)
+    except (TypeError, ValueError):
+        return f"Error: 'grade' must be an integer (got {grade!r})."
+    data = _school_data(db, school, _data)
+    grade_exams = data["_grade_exams"].get(grade, [])
+    if not grade_exams:
+        return f"No exams found for grade {grade} at {school.name}."
+    exam = data["_exam_by_id"].get(grade_exams[-1])
+    if not exam:
+        return f"No exam data for grade {grade} at {school.name}."
+    from app.models.class_ import Class as _Cls
+    rows = (db.query(Mark.score, Student.name, _Cls.section)
+              .join(Student, Mark.student_id == Student.id)
+              .join(_Cls, Student.class_id == _Cls.id)
+              .filter(_Cls.school_id == school.id, _Cls.grade == grade,
+                      Mark.exam_id == exam.id)
+              .all())
+    if not rows:
+        return f"No marks entered yet for {exam.name} (grade {grade})."
+    pcts = [(round(score / max(exam.max_score, 1) * 100, 1), name, sec)
+            for score, name, sec in rows]
+    pcts.sort(key=lambda x: -x[0])
+    n = len(pcts)
+    avg = round(sum(p[0] for p in pcts) / n, 1)
+    lines = [f"{exam.name} (grade {grade}, max {exam.max_score}) — "
+             f"{n} students, average {avg}%:"]
+    lines.append("- Top 5: " + ", ".join(
+        f"{name} ({p}%)" for p, name, _ in pcts[:5]))
+    lines.append("- Bottom 5: " + ", ".join(
+        f"{name} ({p}%, section {sec})" for p, name, sec in reversed(pcts[-5:])))
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# table tools — return ready-to-render ```table blocks the UI draws as real
+# tables (the AI "table creation" UI tool)
+# ─────────────────────────────────────────────────────────────────────────────
+def _table(spec: dict) -> str:
+    import json as _json
+    return "```table\n" + _json.dumps(spec, ensure_ascii=False) + "\n```"
+
+
+def table_grade_overview(db: Session, school: School,
+                         _data: dict | None = None) -> str:
+    """Table: one row per grade — students, sections, average %, attendance,
+    at-risk count."""
+    data = _school_data(db, school, _data)
+    if not data["grades"]:
+        return f"No grade data at {school.name}."
+    at_risk: dict[int, int] = defaultdict(int)
+    for st in data["_student_stats"].values():
+        if st["average"] < 50 or st["attendance_rate"] < 60:
+            at_risk[st["grade"]] += 1
+    rows = [{
+        "Grade": f"Grade {g['grade']}",
+        "Students": g["students"],
+        "Sections": g["classes"],
+        "Avg %": g["average"],
+        "Attendance %": g["attendance_rate"],
+        "At-risk": at_risk.get(g["grade"], 0),
+    } for g in sorted(data["grades"], key=lambda x: x["grade"])]
+    return _table({"title": f"Grade overview — {school.name}", "rows": rows})
+
+
+def table_class_attendance(db: Session, school: School,
+                           _data: dict | None = None) -> str:
+    """Table: attendance per class with chronic-absentee counts."""
+    data = _school_data(db, school, _data)
+    if not data["_class_rows"]:
+        return f"No class data at {school.name}."
+    chronic: dict[str, int] = defaultdict(int)
+    for st in data["_student_stats"].values():
+        if st["attendance_rate"] < 60:
+            chronic[st["class_label"]] += 1
+    rows = [{
+        "Class": c["label"],
+        "Students": c["students"],
+        "Attendance %": c["attendance_rate"],
+        "Chronic absentees": chronic.get(c["label"], 0),
+        "Avg %": c["average"],
+    } for c in sorted(data["_class_rows"],
+                      key=lambda x: (x["grade"], x["section"]))]
+    return _table({"title": f"Class attendance — {school.name}", "rows": rows})
+
+
+def table_task_completion(db: Session, school: School) -> str:
+    """Table: task completion per class (completed / pending / %)."""
+    from app.models.class_ import Class as _Cls
+    from app.models.task import Task, TaskCompletion
+    class_objs = db.query(_Cls).filter(_Cls.school_id == school.id).all()
+    if not class_objs:
+        return f"No classes at {school.name}."
+    name_of = {c.id: f"{c.grade}-{c.section}" for c in class_objs}
+    rows_q = (db.query(TaskCompletion.status, Task.class_id)
+                .join(Task, TaskCompletion.task_id == Task.id)
+                .join(_Cls, Task.class_id == _Cls.id)
+                .filter(_Cls.school_id == school.id)
+                .all())
+    if not rows_q:
+        return f"No tasks recorded at {school.name}."
+    acc: dict[int, dict[str, int]] = defaultdict(lambda: {"completed": 0, "pending": 0})
+    for status, cid in rows_q:
+        acc[cid]["completed" if status == "completed" else "pending"] += 1
+    rows = [{
+        "Class": name_of.get(cid, f"#{cid}"),
+        "Completed": b["completed"],
+        "Pending": b["pending"],
+        "Completion %": round(b["completed"] /
+                              max(b["completed"] + b["pending"], 1) * 100, 1),
+    } for cid, b in sorted(acc.items(),
+                           key=lambda kv: name_of.get(kv[0], "99"))]
+    return _table({"title": f"Task completion — {school.name}", "rows": rows})
+
+
+# Register the v3 ops + table tools on the principal registry.
+TOOLS.update({
+    "get_today_attendance": {
+        "description": (
+            "Attendance for the most recently marked day: present/absent/leave "
+            "per class with the named absentees. THE tool for 'who is absent "
+            "today?' / 'how was attendance yesterday?'."
+        ),
+        "params": {},
+        "function": get_today_attendance,
+    },
+    "get_chronic_absentees": {
+        "description": (
+            "Students whose overall attendance is below a threshold (default "
+            "60%) — the intervention list, worst first."
+        ),
+        "params": {"threshold": "integer (optional, default 60)",
+                   "limit": "integer (optional, default 15)"},
+        "function": get_chronic_absentees,
+    },
+    "get_pending_tasks": {
+        "description": (
+            "Homework/tasks with the most pending work per class: title, due "
+            "date, completed vs pending counts, completion %. Worst first."
+        ),
+        "params": {"limit": "integer (optional, default 15)"},
+        "function": get_pending_tasks,
+    },
+    "get_exam_calendar": {
+        "description": (
+            "All exams (optionally one grade) with term, max score, how many "
+            "marks are entered and each exam's average so far."
+        ),
+        "params": {"grade": "integer (optional) — restrict to one grade"},
+        "function": get_exam_calendar,
+    },
+    "get_teacher_coverage": {
+        "description": (
+            "Staffing overview: HODs, per-subject grade coverage, grade-subjects "
+            "with NO assigned teacher, and extra/subject teachers. Use for "
+            "'is any subject uncovered?' / 'who are the HODs?'."
+        ),
+        "params": {},
+        "function": get_teacher_coverage,
+    },
+    "get_class_size_balance": {
+        "description": (
+            "Students per section with uneven-section warnings — for section "
+            "rebalancing or admission planning."
+        ),
+        "params": {},
+        "function": get_class_size_balance,
+    },
+    "get_exam_result_focus": {
+        "description": (
+            "Most recent exam in ONE grade: top 5 and bottom 5 students by "
+            "percentage of max score, with the exam average."
+        ),
+        "params": {"grade": "integer (required)"},
+        "function": get_exam_result_focus,
+    },
+    "table_grade_overview": {
+        "description": (
+            "Returns a TABLE (rendered as a real grid) — one row per grade: "
+            "students, sections, average %, attendance %, at-risk count. Copy "
+            "the returned ```table block verbatim into your answer."
+        ),
+        "params": {},
+        "function": table_grade_overview,
+    },
+    "table_class_attendance": {
+        "description": (
+            "Returns a TABLE of attendance per class: students, attendance %, "
+            "chronic absentees, average %. Copy the ```table block verbatim."
+        ),
+        "params": {},
+        "function": table_class_attendance,
+    },
+    "table_task_completion": {
+        "description": (
+            "Returns a TABLE of task completion per class: completed, pending "
+            "and completion %. Copy the ```table block verbatim."
+        ),
+        "params": {},
+        "function": table_task_completion,
+    },
+})
+
 # Register the v2 tools on the principal registry.
 TOOLS.update({
     "get_class_detail": {
@@ -1225,3 +1688,46 @@ TOOLS.update({
         "function": visualize_attendance_trend,
     },
 })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VCP (Vice-Principal) TOOLS registry — the vice-principal runs the school's
+# day-to-day operations: attendance, homework follow-through, exams, staffing
+# gaps and section balance. Performance context tools are included so
+# questions can still be grounded, but the OPERATIONS tools lead.
+# ─────────────────────────────────────────────────────────────────────────────
+VCP_TOOLS: dict[str, dict] = {
+    # daily operations
+    "get_today_attendance":     TOOLS["get_today_attendance"],
+    "get_chronic_absentees":    TOOLS["get_chronic_absentees"],
+    "get_attendance_summary":   TOOLS["get_attendance_summary"],
+    "get_attendance_impact":    TOOLS["get_attendance_impact"],
+    "get_pending_tasks":        TOOLS["get_pending_tasks"],
+    "get_task_completion_stats": TOOLS["get_task_completion_stats"],
+    "get_exam_calendar":        TOOLS["get_exam_calendar"],
+    "get_exam_result_focus":    TOOLS["get_exam_result_focus"],
+    "get_teacher_coverage":     TOOLS["get_teacher_coverage"],
+    "get_class_size_balance":   TOOLS["get_class_size_balance"],
+    # class-level drill-downs
+    "get_class_detail":         TOOLS["get_class_detail"],
+    "get_class_roster":         TOOLS["get_class_roster"],
+    "get_class_at_risk":        TOOLS["get_class_at_risk"],
+    "get_class_comparison":     TOOLS["get_class_comparison"],
+    "get_grade_summary":        TOOLS["get_grade_summary"],
+    # student lookups
+    "get_student_details":      TOOLS["get_student_details"],
+    "compare_students":         TOOLS["compare_students"],
+    "get_students_by_band":     TOOLS["get_students_by_band"],
+    "get_top_performers":       TOOLS["get_top_performers"],
+    "get_at_risk_students":     TOOLS["get_at_risk_students"],
+    # grounding + visuals
+    "get_school_summary":       TOOLS["get_school_summary"],
+    "table_grade_overview":     TOOLS["table_grade_overview"],
+    "table_class_attendance":   TOOLS["table_class_attendance"],
+    "table_task_completion":    TOOLS["table_task_completion"],
+    "visualize_attendance_trend": TOOLS["visualize_attendance_trend"],
+    "visualize_class_comparison": TOOLS["visualize_class_comparison"],
+    "visualize_score_distribution": TOOLS["visualize_score_distribution"],
+    "visualize_term_trends":    TOOLS["visualize_term_trends"],
+    "visualize_subject_averages": TOOLS["visualize_subject_averages"],
+}

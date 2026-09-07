@@ -25,6 +25,7 @@ import TeacherReportModal from './dashboard/TeacherReportModal';
 import CompareModal from './dashboard/CompareModal';
 import AcademicModal from './dashboard/AcademicModal';
 import AiPanel from './dashboard/AiPanel';
+import AiPage from './dashboard/AiPage';
 import GlobalSearch from './dashboard/GlobalSearch';
 import DashSidebar from './dashboard/DashSidebar';
 import { LevelThemeStyle } from './dashboard/LevelThemes';
@@ -42,6 +43,7 @@ const parseHash = (h) => {
   if (h && h.startsWith('class=')) return { view: 'class', id: decodeURIComponent(h.slice(6)) };
   if (h && h.startsWith('subject=')) return { view: 'subject', id: decodeURIComponent(h.slice(8)) };
   if (h === 'saved') return { view: 'saved', id: null };
+  if (h === 'ai') return { view: 'ai', id: null }; // the AI's own full page
   return { view: 'dash', id: null };
 };
 
@@ -176,6 +178,7 @@ export default function PrincipalDashboard() {
     }
     setUiMode('p');
     if (key === 'saved') { go('saved'); return; }
+    if (key === 'aiSec') { go('ai'); return; } // the AI's own full page
     if (view !== 'dash') { go(''); }
     requestAnimationFrame(() => {
       const el = document.getElementById(key);
@@ -347,6 +350,9 @@ export default function PrincipalDashboard() {
   const signOut = () => { logout(); navigate('/'); };
   const isAdminRole = ['super_admin', 'school_admin', 'admin'].includes(user?.role);
   const inCtMode = uiMode === 'ct' && !!ctMe;
+  /* AI persona follows the account: the vice-principal gets their own VCP AI
+     (operations desk) instead of the principal's strategic analyst. */
+  const aiPersona = user?.role === 'vice_principal' ? 'vcp' : 'principal';
 
   /* ================= render ================= */
   const booting = !stats && !statsErr;
@@ -354,7 +360,7 @@ export default function PrincipalDashboard() {
     <div className={`pd-root v15-root${navCollapsed ? ' nav-collapsed' : ''}${aiCollapsed ? ' ai-collapsed' : ''}${aiOpenMobile ? ' ai-open' : ''}${mobNav ? ' mob-nav' : ''}${inCtMode ? ' ct-root' : ''}`}>
       <LevelThemeStyle />
       <DashSidebar
-        active={view === 'dash' ? 'schoolSec' : view}
+        active={view === 'dash' ? 'schoolSec' : (view === 'ai' ? 'aiSec' : view)}
         onGo={navGo}
         collapsed={navCollapsed}
         onToggle={() => setNavCollapsed((c) => !c)}
@@ -374,10 +380,17 @@ export default function PrincipalDashboard() {
 
       {!inCtMode && (
       <main className="v15-main pd-main" ref={mainRef}>
+        {view === 'ai' ? (
+          /* the AI's own full page — takes over the main area entirely
+             (its header replaces the pagehead; the thread is shared with
+             the side panel via the aiThread store) */
+          <AiPage persona={aiPersona} onBack={() => go('')} />
+        ) : (
+        <>
         <header className="pagehead">
           <div>
             <div className="eyebrow">Fetch-X</div>
-            <h1>Principal Dashboard</h1>
+            <h1>{user?.role === 'vice_principal' ? 'Vice-Principal Dashboard' : 'Principal Dashboard'}</h1>
             <div className="subtitle">{booting ? 'Crunching school data…' : 'School-wide academic and operational performance.'}</div>
           </div>
           <GlobalSearch
@@ -484,6 +497,8 @@ export default function PrincipalDashboard() {
             savedCount={savedIds.size}
           />
         )}
+        </>
+        )}
       </main>
       )}
 
@@ -500,13 +515,21 @@ export default function PrincipalDashboard() {
         </div>
       )}
 
-      <AiPanel
-        collapsed={aiCollapsed} onToggle={toggleAi}
-        subtitle={inCtMode ? 'Analysing your class' : 'Analysing the entire school'}
-      />
-      <button type="button" className="ai-fab" onClick={toggleAi} aria-label="Open AI panel">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5c.7 5 3.3 7.6 8.3 8.3-5 .7-7.6 3.3-8.3 8.3-.7-5-3.3-7.6-8.3-8.3 5-.7 7.6-3.3 8.3-8.3z" /></svg>
-      </button>
+      {/* on the AI's own page the side panel is replaced by the page itself */
+      /* in CT mode the workspace owns the main area, so no expand there */}
+      {view !== 'ai' && (
+        <AiPanel
+          collapsed={aiCollapsed} onToggle={toggleAi}
+          onExpand={inCtMode ? undefined : () => go('ai')}
+          persona={aiPersona}
+          subtitle={inCtMode ? 'Analysing your class' : undefined}
+        />
+      )}
+      {view !== 'ai' && (
+        <button type="button" className="ai-fab" onClick={toggleAi} aria-label="Open AI panel">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5c.7 5 3.3 7.6 8.3 8.3-5 .7-7.6 3.3-8.3 8.3-.7-5-3.3-7.6-8.3-8.3 5-.7 7.6-3.3 8.3-8.3z" /></svg>
+        </button>
+      )}
 
       {/* bookmark-to-folder popover */}
       {bmPop && createPortal(

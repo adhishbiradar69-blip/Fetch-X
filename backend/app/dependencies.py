@@ -29,8 +29,8 @@ ADMIN_ROLES = ("super_admin", "school_admin")
 # this set is rejected — even if the row somehow exists in the DB (e.g. an
 # old DB from a previous schema or a hand-edited row).
 ALLOWED_ROLES = frozenset({
-    "super_admin", "school_admin", "principal", "chairperson",
-    "class_teacher", "parent",
+    "super_admin", "school_admin", "principal", "vice_principal",
+    "chairperson", "class_teacher", "parent",
 })
 
 
@@ -165,7 +165,7 @@ def assert_class_access(user: User, cls, write: bool = False):
                 detail="Chairpersons have read-only access.",
             )
         return
-    if role in ("school_admin", "principal"):
+    if role in ("school_admin", "principal", "vice_principal"):
         if user.school_id is None or cls is None or cls.school_id != user.school_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -188,8 +188,8 @@ def assert_class_access(user: User, cls, write: bool = False):
 def assert_student_access(user: User, student, db: Session):
     """Raise 403 unless `user` may read this student's records.
 
-    school_admin / principal → student's class must be in their school;
-    class_teacher → student must be in their assigned class;
+    school_admin / principal / vice_principal → student's class must be in
+    their school; class_teacher → student must be in their assigned class;
     parent → student.parent_user_id must point at them.
     """
     from app.models.class_ import Class  # local import avoids a circular dep
@@ -200,7 +200,7 @@ def assert_student_access(user: User, student, db: Session):
     if role == "chairperson":
         return
     cls = db.query(Class).filter(Class.id == student.class_id).first() if student else None
-    if role in ("school_admin", "principal"):
+    if role in ("school_admin", "principal", "vice_principal"):
         if user.school_id is None or cls is None or cls.school_id != user.school_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
