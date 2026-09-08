@@ -7,6 +7,8 @@ import { X } from 'lucide-react';
 import { fetchStudentReport } from './data';
 import { SectionHead } from './Sections';
 import { initials } from './util';
+import ExportCsvButton from '../../../components/v16/ExportCsvButton';
+import { csvStamp } from '../../../lib/csv';
 
 export default function SavedStudents({
   folders, onCreate, onDeleteFolder, onRemoveStudent, onBack, onOpenReport, savedCount,
@@ -38,6 +40,25 @@ export default function SavedStudents({
     if (onCreate(name.trim())) setName('');
   };
 
+  /* EXPORT CSV — every bookmarked student with the live report figures the
+     cards show (folder, class, school rank, overall). Rows still loading
+     or unavailable export with blank metrics — honest, no placeholders. */
+  const exportSavedCsv = async () => ({
+    filename: `fetchx-saved-students-${csvStamp()}.csv`,
+    headers: ['FOLDER', 'STUDENT NAME', 'CLASS', 'SCHOOL RANK', 'OVERALL %'],
+    rows: folders.flatMap((f) => f.studentIds.map((id) => {
+      const entry = cache[id];
+      const r = entry?.report;
+      return [
+        f.name,
+        r?.student?.name || (entry?.err ? 'Unavailable' : ''),
+        r?.student?.class_name || '',
+        r?.ranks?.in_school ?? '',
+        r?.derived?.overall ?? '',
+      ];
+    })),
+  });
+
   return (
     <div>
       <div className="cd-head">
@@ -68,6 +89,7 @@ export default function SavedStudents({
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); create(); } }}
           />
           <button type="button" className="btn-back" style={{ marginBottom: 0 }} onClick={create}>+ CREATE FOLDER</button>
+          {savedCount > 0 && <ExportCsvButton fetcher={exportSavedCsv} title="Download every saved student as a CSV file" />}
         </div>
 
         {!folders.length && (
@@ -119,7 +141,7 @@ export default function SavedStudents({
                         <span className="avatar">{initials(stu.name)}</span>
                         <span className="fi">
                           <span className="fn">{stu.name || `Student ${id}`}</span>
-                          <span className="fc">Class {stu.class_name || '—'}{r.ranks?.in_school ? ` · Rank #${r.ranks.in_school}` : ''}</span>
+                          <span className="fc">{stu.class_name || '—'}{r.ranks?.in_school ? ` · Rank #${r.ranks.in_school}` : ''}</span>
                         </span>
                         <span className="fa">{r.derived?.overall ?? '—'}%</span>
                         <button

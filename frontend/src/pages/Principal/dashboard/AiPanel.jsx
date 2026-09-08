@@ -9,11 +9,11 @@
    (#ai view) — when the thread gets long, an inline chip offers the jump.
    Personas: 'principal' (Fetch-X AI) and 'vcp' (VCP AI, operations). */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ChevronRight, Maximize2, SendHorizontal, TrendingUp, Trophy, User } from 'lucide-react';
+import { Check, ChevronRight, Copy, Eraser, Maximize2, SendHorizontal, TrendingUp, Trophy, User } from 'lucide-react';
 import { prefersReducedMotion } from './util';
 import { SchoolLogo } from './DashSidebar';
 import { BarChart, Distro, LineChart } from './charts';
-import { AI_PERSONAS, aiAsk, aiRetry, getAiSnapshot, subscribeAi } from './aiThread';
+import { AI_PERSONAS, aiAsk, aiClear, aiRetry, getAiSnapshot, subscribeAi, suggestFollowups } from './aiThread';
 
 /* ---------- AI chart blocks — render the backend's chart payloads ------ */
 export function AiChart({ spec }) {
@@ -121,11 +121,17 @@ export function MarkdownLite({ text }) {
   const out = [];
   let lt = null;
   let li = [];
+  let olStart = 0; /* first number of the current ol run — nested bullets split
+                      an ol into several <ol> blocks; carry the numbering so
+                      items 2..n don't all render as "1." (HTML restarts at 1) */
   const flush = () => {
     if (li.length) {
-      out.push(lt === 'ol' ? <ol key={`l${out.length}`}>{li}</ol> : <ul key={`l${out.length}`}>{li}</ul>);
+      out.push(lt === 'ol'
+        ? <ol key={`l${out.length}`} start={olStart > 1 ? olStart : undefined}>{li}</ol>
+        : <ul key={`l${out.length}`}>{li}</ul>);
       li = [];
       lt = null;
+      olStart = 0;
     }
   };
   for (let i = 0; i < lines.length; i++) {
@@ -174,7 +180,9 @@ export function MarkdownLite({ text }) {
       if (lt !== 'ul') { flush(); lt = 'ul'; }
       li.push(<li key={i}>{inline(t.slice(2))}</li>);
     } else if (/^\d+\.\s/.test(t)) {
+      const num = parseInt(t.match(/^(\d+)\./)[1], 10);
       if (lt !== 'ol') { flush(); lt = 'ol'; }
+      if (!li.length) olStart = num; /* opening item of a run sets the start */
       li.push(<li key={i}>{inline(t.replace(/^\d+\.\s/, ''))}</li>);
     } else if (/^(---|___|\*\*\*)$/.test(t)) {
       flush();
@@ -188,11 +196,54 @@ export function MarkdownLite({ text }) {
   return <>{out}</>;
 }
 
+/* ---------- per-message COPY (clipboard + COPIED feedback) ------------- */
+function CopyBtn({ text }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* clipboard API unavailable (http/permissions) — last-resort path */
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* give up silently */ }
+      ta.remove();
+    }
+    setDone(true);
+    setTimeout(() => setDone(false), 1600);
+  };
+  return (
+    <button
+      type="button" className={`ai-copy${done ? ' ok' : ''}`}
+      onClick={copy}
+      title="Copy this answer"
+      aria-label={done ? 'Copied' : 'Copy this answer'}
+    >
+      {done ? <Check strokeWidth={2.4} /> : <Copy strokeWidth={2} />}
+      <span aria-live="polite">{done ? 'COPIED' : 'COPY'}</span>
+    </button>
+  );
+}
+
 /* ---------- shared message list (side panel + full page both use it) --- */
-export function AiMessageList({ msgs, loading, persona, endRef }) {
+export function AiMessageList({ msgs, loading, persona, endRef, onAsk }) {
+  /* chips only after the LAST answer — older messages stay quiet */
+  const lastBotIdx = (() => {
+    if (loading) return -1;
+    for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'bot') return i;
+    return -1;
+  })();
+  const followups = onAsk && lastBotIdx === msgs.length - 1
+    ? suggestFollowups(persona, msgs)
+    : [];
   return (
     <>
       {msgs.map((m, i) => {
+        if (m.role === 'bot' && m.pending) return null; /* placeholder — the loading wave speaks for it */
         if (m.role === 'user') return <div className="ai-msg user" key={i}>{m.content}</div>;
         if (m.role === 'error') {
           /* 403 means "not your role", not "backend down" — a retry
@@ -210,10 +261,28 @@ export function AiMessageList({ msgs, loading, persona, endRef }) {
         return (
           <div className="ai-msg bot" key={i}>
             <MarkdownLite text={m.content} />
-            {(m.source || m.tools?.length > 0) && (
+            {(m.source || m.tools?.length > 0 || !loading) && (
               <div className="ai-badges">
                 {m.source && <span className="ai-badge">{m.source}</span>}
-                {m.tools.map((t) => <span className="ai-badge tools" key={t}>{t}</span>)}
+                {(m.tools || []).map((t) => <span className="ai-badge tools" key={t}>{t}</span>)}
+                {!loading && <CopyBtn text={m.content} />}
+              </div>
+            )}
+            {i === lastBotIdx && followups.length > 0 && (
+              <div className="ai-follow">
+                <span className="ai-follow-label">KEEP DIGGING</span>
+                <div className="ai-follow-chips">
+                  {followups.map((f, k) => (
+                    <button
+                      key={f} type="button" className="sugg"
+                      style={{ animationDelay: `${k * 0.06}s` }}
+                      onClick={() => onAsk(f)}
+                    >
+                      <ChevronRight strokeWidth={2.2} />
+                      {f}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -351,6 +420,14 @@ export default function AiPanel({
         <div className="rightpanel">
           <div className="rb-top">
             <span className="rb-eyebrow">{personaCfg.eyebrow}</span>
+            {!!msgs.length && !loading && (
+              <button
+                type="button" className="rb-collapse" onClick={() => aiClear(persona)}
+                title="Clear this conversation" aria-label="Clear this conversation"
+              >
+                <Eraser strokeWidth={2.2} />
+              </button>
+            )}
             {onExpand && (
               <button
                 type="button" className="rb-collapse" onClick={onExpand}
@@ -374,7 +451,7 @@ export default function AiPanel({
 
           {msgs.length || loading ? (
             <div className="ai-msgs">
-              <AiMessageList msgs={msgs} loading={loading} persona={persona} endRef={msgsEndRef} />
+              <AiMessageList msgs={msgs} loading={loading} persona={persona} endRef={msgsEndRef} onAsk={ask} />
             </div>
           ) : (
             <>

@@ -7,6 +7,7 @@ import { initials, pct } from './util';
 
 export default function GlobalSearch({
   inputRef, classesAll = [], teachers = [], subjects = [], onOpenClass, onOpenStudent, onOpenTeacher, onOpenSubject,
+  placeholder = 'Search students, classes, subjects, teachers…',
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
@@ -120,7 +121,7 @@ export default function GlobalSearch({
       <input
         ref={inputRef}
         type="text"
-        placeholder="Search students, classes, subjects, teachers…"
+        placeholder={placeholder}
         autoComplete="off"
         value={q}
         onChange={(e) => {

@@ -1,0 +1,195 @@
+/* ============================================================
+   Fetch-X — PRINT stylesheet (v16)
+
+   Makes the browser-print path a first-class export alongside the
+   PDF export of the report modals:
+
+     1 · Only the OPEN report/compare modal prints — the app chrome,
+         sidebar, AI rail and the page behind the overlay are excluded.
+     2 · The card is forced onto the light token set (dark mode prints
+         clean), overlays/animation/transitions are flattened, clipped
+         charts are expanded and colored fills survive print-color-adjust.
+     3 · A print letterhead (FETCH-X · <meta>) is injected from the
+         data-print-meta attribute that the PRINT buttons stamp via
+         printCard.js before window.print().
+     4 · Page-break hygiene: cards and stat rows never split; interactive
+         controls (pickers, toggles, close buttons) disappear on paper.
+
+   Import once in main.jsx — everything is scoped under @media print and
+   .modal-backdrop.open, so it cannot leak into the live app.
+   ============================================================ */
+
+@media print {
+  @page { margin: 10mm; }
+
+  html, body {
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* ---- 1 · scope: hide the app, show only the open modal surface ---- */
+  body * { visibility: hidden !important; }
+  .modal-backdrop.open,
+  .modal-backdrop.open * { visibility: visible !important; }
+
+  /* exact colors so chips, donuts, bar fills and rank pills keep their
+     ink on paper (white backgrounds stay white via the token reset) */
+  .modal-backdrop.open,
+  .modal-backdrop.open * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* ---- 2 · the modal becomes a static, light, full-width document ---- */
+  .modal-backdrop.open {
+    position: static !important;
+    inset: auto !important;
+    background: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+  .modal-backdrop.open .report,
+  .modal-backdrop.open .cmp {
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    animation: none !important;
+    overflow: visible !important;
+    /* force the light token set — mirrors .force-light, so printing from
+       dark mode produces a clean white sheet */
+    --surf: #fff; --ink: #1c1840; --body-text: #4b4a6b; --muted: #6b6e85;
+    --line: #dcd9ea; --chip: #f3f3f9; --lav: #f2f0fb; --track: #e9e4fa;
+    --head: #fbfaff; --hov: #f4f2fd; --gridln: #e7e5f4;
+    --shadow: rgba(0, 0, 0, 0);
+    background: #fff !important;
+    color: #1c1840 !important;
+  }
+
+  /* ---- 3 · letterhead (stamped by the PRINT buttons) ----------------- */
+  .modal-backdrop.open .report::before,
+  .modal-backdrop.open .cmp::before {
+    content: 'FETCH-X · ' attr(data-print-meta);
+    display: block;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: #8f92ab;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #dcd9ea;
+  }
+
+  /* ---- 4 · flatten motion + expand clipped reveals ------------------- */
+  .modal-backdrop.open .report *,
+  .modal-backdrop.open .cmp * {
+    animation: none !important;
+    transition: none !important;
+  }
+  .modal-backdrop.open .lrreveal {
+    clip-path: inset(0 -2% 0 0) !important;
+  }
+  /* hover-only chart affordances never belong on paper */
+  .modal-backdrop.open .ltip,
+  .modal-backdrop.open .lxhair,
+  .modal-backdrop.open .ldot { display: none !important; }
+
+  /* ---- 5 · page-break hygiene ---------------------------------------- */
+  .modal-backdrop.open .card,
+  .modal-backdrop.open .s-card,
+  .modal-backdrop.open .rep-row,
+  .modal-backdrop.open .stat-cell,
+  .modal-backdrop.open .op-stat,
+  .modal-backdrop.open .subject-grid > *,
+  .modal-backdrop.open .rep-trio > *,
+  .modal-backdrop.open .bigchart {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .modal-backdrop.open .rep-sub { break-after: avoid; page-break-after: avoid; }
+
+  /* ---- 6 · interactive controls disappear on paper ------------------- */
+  .modal-backdrop.open .btn-close,
+  .modal-backdrop.open .rep-tools,
+  .modal-backdrop.open .ctabs,
+  .modal-backdrop.open .rep-terms,
+  .modal-backdrop.open .cmp-picker,
+  .modal-backdrop.open .seg,
+  .modal-backdrop.open .msearch,
+  .modal-backdrop.open .ct-btn,
+  .modal-backdrop.open .srow .tb { display: none !important; }
+
+  /* ============================================================
+     7 · TIMETABLE SHEET — body.fx-print-tt scope
+     The timetable is NOT a modal, so it gets its own print scope:
+     TimetableTools stamps data-print-meta + adds .fx-print-tt to
+     <body>, and everything except the .tt-print-scope disappears.
+     ============================================================ */
+  body.fx-print-tt .tt-print-scope,
+  body.fx-print-tt .tt-print-scope * {
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  body.fx-print-tt .tt-print-scope {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    /* force the light token set — the grid reads its colors from these */
+    --surf: #fff; --ink: #1c1840; --body-text: #4b4a6b; --muted: #6b6e85;
+    --line: #dcd9ea; --chip: #f3f3f9; --lav: #f2f0fb; --track: #e9e4fa;
+    --head: #fbfaff; --hov: #f4f2fd; --gridln: #e7e5f4;
+    --shadow: rgba(0, 0, 0, 0);
+    color: #1c1840 !important;
+  }
+  /* letterhead — same vocabulary as the modal sheets */
+  body.fx-print-tt .tt-print-scope::before {
+    content: 'FETCH-X · ' attr(data-print-meta);
+    display: block;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: #8f92ab;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #dcd9ea;
+  }
+  body.fx-print-tt .tt-print-scope * {
+    animation: none !important;
+    transition: none !important;
+  }
+  /* the grid must shrink from its 700px screen minimum to the paper */
+  body.fx-print-tt .tt-wrap {
+    box-shadow: none !important;
+    overflow: visible !important;
+    border-color: #dcd9ea !important;
+    background: #fff !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  body.fx-print-tt .tt-grid {
+    min-width: 0 !important;
+    grid-template-columns: 30px repeat(6, 1fr) !important;
+  }
+  body.fx-print-tt .tt-h { position: static !important; background: #fbfaff !important; }
+  body.fx-print-tt .tt-p { background: #fbfaff !important; }
+  body.fx-print-tt .tt-c b { font-size: 10px !important; }
+  body.fx-print-tt .tt-c span { font-size: 9.5px !important; white-space: normal !important; }
+  /* the tools row itself never prints */
+  body.fx-print-tt .tt-tools { display: none !important; }
+}

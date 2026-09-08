@@ -70,6 +70,12 @@ export const fetchTasksSummary = () => get('/principal/tasks-summary');
 /* GET /principal/school-rank → { rank, of, avg } */
 export const fetchSchoolRank = () => get('/principal/school-rank');
 
+/* GET /principal/dashboard — legacy full snapshot. The v16 pagehead / tier
+   band need the SCHOOL NAME, which the v16 KPI endpoints (/stats,
+   /school-rank) deliberately omit; only this snapshot carries
+   `school:{id,name}`. Fired once at boot in parallel with the rest. */
+export const fetchSchoolOverview = () => get('/principal/dashboard');
+
 /* GET /principal/student-report/{id} */
 export async function fetchStudentReport(id) {
   const d = await get(`/principal/student-report/${id}`);

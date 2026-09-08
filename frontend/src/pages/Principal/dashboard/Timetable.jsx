@@ -1,9 +1,17 @@
 /* Timetable — designer v15: the weekly class grid (MON–SAT × 9 periods)
    and the personal teacher grid. Data comes from the NEW backend
-   GET /timetable/class/{id} and /timetable/teacher/{id}. */
-import { useEffect, useState } from 'react';
+   GET /timetable/class/{id} and GET /timetable/teacher/{id}.
+
+   v16 export round: both grids gained the shared .tt-tools row —
+     • EXPORT CSV  → the grid as a PERIOD × DAY sheet (RFC-4180, BOM'd)
+     • PRINT       → styles/print.css scopes the paper to .tt-print-scope
+                     (light tokens, letterhead via data-print-meta) */
+import { useEffect, useRef, useState } from 'react';
+import { Download, Printer } from 'lucide-react';
 import { fetchClassTimetable, fetchTeacherTimetable } from './data';
 import { useReveal } from './charts';
+import { csvStamp, downloadCsv } from '../../../lib/csv';
+import { printStamp } from './printCard';
 
 function Grid({ data, mode }) {
   const reveal = useReveal();
@@ -51,10 +59,80 @@ function Foot({ items }) {
   );
 }
 
+/* ---------- export tools (shared by class + personal grids) ----------- */
+
+const cellText = (L, mode) => {
+  if (!L) return '—';
+  if (mode === 'teacher') return [L.class, L.name].filter(Boolean).join(' · ') || L.name;
+  return [L.short, L.teacher].filter(Boolean).join(' · ');
+};
+
+/* the grid as a CSV sheet — one row per period, one column per day */
+function buildTimetableCsv(data, mode) {
+  const { days, grid } = data;
+  return {
+    headers: ['PERIOD', ...days.map((d) => String(d).toUpperCase())],
+    rows: grid.map((row, p) => [`P${p + 1}`, ...row.map((L) => cellText(L, mode))]),
+  };
+}
+
+/* browser-print path — print.css scopes the paper to .tt-print-scope
+   (body.fx-print-tt), mirrors the modal print flow in printCard.js */
+function useTimetablePrint() {
+  const scopeRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const print = async (label) => {
+    const scope = scopeRef.current;
+    if (!scope || busy) return;
+    setBusy(true);
+    try { await document.fonts.ready; } catch { /* font API unavailable */ }
+    await new Promise((r) => setTimeout(r, 200));
+    scope.setAttribute('data-print-meta', `TIMETABLE · ${String(label).toUpperCase()} · GENERATED ${printStamp()}`);
+    document.body.classList.add('fx-print-tt');
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      document.body.classList.remove('fx-print-tt');
+      scope.removeAttribute('data-print-meta');
+      window.removeEventListener('afterprint', cleanup);
+      setBusy(false);
+    };
+    /* afterprint is the happy path; the timer is the safety net for
+       cancelled dialogs / headless quirks (same as printCardEl) */
+    window.addEventListener('afterprint', cleanup);
+    setTimeout(cleanup, 20000);
+    try { window.print(); } catch { cleanup(); }
+  };
+  return { scopeRef, print, busy };
+}
+
+function TimetableTools({ data, mode, label, filename, onPrint, printBusy }) {
+  if (!data) return null;
+  const exportCsv = () => {
+    const { headers, rows } = buildTimetableCsv(data, mode);
+    downloadCsv(`fetchx-timetable-${filename}-${csvStamp()}.csv`, headers, rows);
+  };
+  return (
+    <div className="tt-tools">
+      <button type="button" className="exe" onClick={exportCsv} title="Download the grid as a CSV sheet">
+        <Download strokeWidth={2.4} aria-hidden="true" /><span>EXPORT CSV</span>
+      </button>
+      <button
+        type="button" className="exe" onClick={() => onPrint(label)}
+        disabled={printBusy} title="Print this timetable"
+      >
+        <Printer strokeWidth={2.4} aria-hidden="true" /><span>PRINT</span>
+      </button>
+    </div>
+  );
+}
+
 /* mode="class": fetch by class id (principal + CT console). */
-export function ClassTimetable({ classId }) {
+export function ClassTimetable({ classId, label }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(false);
+  const { scopeRef, print, busy } = useTimetablePrint();
 
   useEffect(() => {
     let alive = true;
@@ -73,7 +151,11 @@ export function ClassTimetable({ classId }) {
   if (!data) return <div className="pd-skel tall" />;
   const f = data.foot || {};
   return (
-    <>
+    <div className="tt-print-scope" ref={scopeRef}>
+      <TimetableTools
+        data={data} mode="class" label={label || 'Class timetable'} filename="class"
+        onPrint={print} printBusy={busy}
+      />
       <Grid data={data} mode="class" />
       <Foot items={[
         ['PERIODS / DAY', f.periods_per_day ?? 9],
@@ -86,14 +168,15 @@ export function ClassTimetable({ classId }) {
         ['MASS PT', f.mass_pt ?? 'SAT P1'],
         ['CCA', f.cca ?? 'SAT P7'],
       ]} />
-    </>
+    </div>
   );
 }
 
 /* mode="teacher": fetch the caller's own grid. */
-export function PersonalTimetable({ teacherId }) {
+export function PersonalTimetable({ teacherId, label }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(false);
+  const { scopeRef, print, busy } = useTimetablePrint();
 
   useEffect(() => {
     let alive = true;
@@ -112,7 +195,11 @@ export function PersonalTimetable({ teacherId }) {
   if (!data) return <div className="pd-skel tall" />;
   const s = data.summary || {};
   return (
-    <>
+    <div className="tt-print-scope" ref={scopeRef}>
+      <TimetableTools
+        data={data} mode="teacher" label={label || 'Personal timetable'} filename="my"
+        onPrint={print} printBusy={busy}
+      />
       <Grid data={data} mode="teacher" />
       <Foot items={[
         ['WEEKLY PERIODS', s.weekly_periods ?? 0],
@@ -120,6 +207,6 @@ export function PersonalTimetable({ teacherId }) {
         ['SUBJECT', (s.subjects || []).join(', ') || '—'],
         ['CLASSES', (s.classes || []).length || 0],
       ]} />
-    </>
+    </div>
   );
 }

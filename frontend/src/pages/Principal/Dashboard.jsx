@@ -1,22 +1,27 @@
-/* Fetch-X — Principal Dashboard (designer v15).
-   Port of dashboard(2).html v15 with REAL backend data. Route:
-   /principal/dashboard (unchanged). The page now owns its full chrome —
-   the v15 sidebar (level links + Saved + sign out), level themes
+/* Fetch-X — Principal Dashboard (designer v16).
+   Port of principal.html v16 with REAL backend data. Route:
+   /principal/dashboard (unchanged). v16 chrome: PageHead tier="pr"
+   (eyebrow + dynamic counts search + ACADEMIC PERFORMANCE / COMPARE
+   actions), the TIER 01 · SCHOOL band fused to the five level sections,
+   term toggles in the report-card / teacher-report modals, level themes
    (50-swatch popover per level), subject detail view (#subject=<id>),
    per-subject class-comparison tabs, rank-band student tabs, and the
    resizable AI right panel (real /principal/ai/analyze). */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { GitCompare, Menu, Moon, Plus, Sun, X } from 'lucide-react';
+import { Menu, Moon, Plus, Sun, X } from 'lucide-react';
 import {
   fetchAttendanceSeries, fetchClassComparison, fetchClassComparisonBySubject, fetchClasses,
   fetchCtMe, fetchCtTeachingClasses, fetchCtTeacherReport,
-  fetchScoreDistribution, fetchSchoolRank, fetchStats, fetchStudents, fetchTeachers,
-  fetchTermAverages,
+  fetchScoreDistribution, fetchSchoolOverview, fetchSchoolRank, fetchStats, fetchStudents,
+  fetchTeachers, fetchTermAverages,
 } from './dashboard/data';
-import { loadFolders, saveFolders } from './dashboard/util';
+import { loadFolders, saveFolders, pct } from './dashboard/util';
 import { SectionSchool, SectionSubjects, SectionClasses, SectionStudents, SectionTeachers } from './dashboard/Sections';
+import { PageHead, TierBand, Tier } from '../../components/v16/Shell';
+import { TIER_ICONS } from '../../components/v16/icons';
+import { csvStamp, fetchAllPages } from '../../lib/csv';
 import ClassDetail from './dashboard/ClassDetail';
 import SubjectDetail from './dashboard/SubjectDetail';
 import SavedStudents from './dashboard/SavedStudents';
@@ -35,6 +40,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { Toast } from '../../components/ui';
 import './dashboard/dashboard.css';
 import './dashboard/v15.css';
+import './dashboard/v16.css';
 
 const PAGE_SIZE = 30;
 
@@ -59,6 +65,9 @@ export default function PrincipalDashboard() {
   const [distro, setDistro] = useState(null);
   const [rank, setRank] = useState(null);
   const [classesAll, setClassesAll] = useState(null);
+  /* v16: school identity for the pagehead subtitle + tier band tags
+     (the KPI endpoints omit the name; the legacy snapshot carries it) */
+  const [school, setSchool] = useState(null);
 
   const [attRange, setAttRange] = useState('3M');
   const [attPoints, setAttPoints] = useState(null);
@@ -191,7 +200,7 @@ export default function PrincipalDashboard() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [s, t, d, c, r, a, cm, tc] = await Promise.allSettled([
+      const [s, t, d, c, r, a, cm, tc, ov] = await Promise.allSettled([
         fetchStats(),
         fetchTermAverages(),
         fetchScoreDistribution(),
@@ -200,6 +209,7 @@ export default function PrincipalDashboard() {
         fetchAttendanceSeries(attRange),
         fetchClassComparison('avg'),
         fetchTeachers(),
+        fetchSchoolOverview(),
       ]);
       if (!alive) return;
       if (s.status === 'fulfilled') { setStats(s.value); setStatsErr(false); } else setStatsErr(true);
@@ -210,7 +220,8 @@ export default function PrincipalDashboard() {
       if (a.status === 'fulfilled') setAttPoints(a.value.points || []);
       if (cm.status === 'fulfilled') setCmpClasses(cm.value.classes || []);
       if (tc.status === 'fulfilled') setTeachers(tc.value.teachers || []);
-      const failed = [s, t, d, c, r, a, cm, tc].filter((x) => x.status === 'rejected').length;
+      if (ov.status === 'fulfilled') setSchool(ov.value.school || null);
+      const failed = [s, t, d, c, r, a, cm, tc, ov].filter((x) => x.status === 'rejected').length;
       if (failed) showToast(`${failed} data source${failed > 1 ? 's' : ''} unavailable — the backend seed may still be running`, 'error');
     })();
     return () => { alive = false; };
@@ -269,6 +280,21 @@ export default function PrincipalDashboard() {
       .catch(() => showToast('Could not load more students', 'error'))
       .finally(() => setStLoadingMore(false));
   }, [stLoading, stLoadingMore, stTotal, stRows.length, stPage, query, minAvg]);
+
+  /* EXPORT CSV — every student of the CURRENT search + rank band across
+     the whole school (pages of 200 like the CP/AD consoles). */
+  const exportStudentsCsv = useCallback(async (onProgress) => {
+    const rows = await fetchAllPages(
+      (page, pageSize) => fetchStudents({ search: query.trim(), page, pageSize, minAvg })
+        .then((d) => ({ items: d.students, total: d.total })),
+      onProgress,
+    );
+    return {
+      filename: `fetchx-school-students-${csvStamp()}.csv`,
+      headers: ['RANK', 'STUDENT NAME', 'CLASS', 'ALL-TERM AVG %', 'ATTENDANCE %'],
+      rows: rows.map((s) => [s.rank, s.name, s.className, pct(s.avg), s.attendance != null ? pct(s.attendance) : '']),
+    };
+  }, [query, minAvg]);
 
   /* ================= folders ================= */
   const createFolder = (name) => {
@@ -354,6 +380,14 @@ export default function PrincipalDashboard() {
      (operations desk) instead of the principal's strategic analyst. */
   const aiPersona = user?.role === 'vice_principal' ? 'vcp' : 'principal';
 
+  /* ---------------- v16 pagehead / tier-band copy ---------------- */
+  const SCHOOL = school?.name || 'School';
+  const roleNoun = user?.role === 'vice_principal' ? 'Vice-Principal' : isAdminRole ? 'Administrator' : 'Principal';
+  const roleLabel = user?.role === 'vice_principal' ? 'VICE-PRINCIPAL' : isAdminRole ? 'ADMIN' : 'PRINCIPAL';
+  const searchPlaceholder = stats
+    ? `Search ${stats.students} students, ${stats.classes} classes, teachers, subjects…`
+    : 'Search students, classes, subjects, teachers…';
+
   /* ================= render ================= */
   const booting = !stats && !statsErr;
   return (
@@ -366,6 +400,7 @@ export default function PrincipalDashboard() {
         onToggle={() => setNavCollapsed((c) => !c)}
         savedCount={savedIds.size}
         userName={user?.full_name}
+        roleLabel={roleLabel}
         onSignOut={signOut}
         mode={uiMode}
         ctGroup={ctMe ? { label: (ctMe.class?.name || '').toUpperCase(), active: ctPage } : null}
@@ -387,53 +422,72 @@ export default function PrincipalDashboard() {
           <AiPage persona={aiPersona} onBack={() => go('')} />
         ) : (
         <>
-        <header className="pagehead">
-          <div>
-            <div className="eyebrow">Fetch-X</div>
-            <h1>{user?.role === 'vice_principal' ? 'Vice-Principal Dashboard' : 'Principal Dashboard'}</h1>
-            <div className="subtitle">{booting ? 'Crunching school data…' : 'School-wide academic and operational performance.'}</div>
-          </div>
-          <GlobalSearch
-            inputRef={gsRef}
-            classesAll={classesAll || []}
-            teachers={teachers || []}
-            subjects={termAvg?.subjects || []}
-            onOpenClass={openClass}
-            onOpenStudent={openReport}
-            onOpenTeacher={openTeacher}
-            onOpenSubject={openSubject}
-          />
-          <div className="pagehead-actions">
-            <button
-              type="button"
-              className="btn-mode"
-              onClick={toggle}
-              title={mode === 'dark' ? 'Light mode' : 'Dark mode'}
-              aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {mode === 'dark' ? <Sun strokeWidth={2} /> : <Moon strokeWidth={2} />}
-            </button>
-            <button type="button" className="btn-aperf" onClick={() => setShowAperf(true)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 20 7 20 17 12 22 4 17 4 7" /><polygon points="12 8 15.5 10 15.5 14 12 16 8.5 14 8.5 10" /></svg>
-              ACADEMIC PERFORMANCE
-            </button>
-            <button type="button" className="btn-compare" onClick={() => setShowCompare(true)}>
-              <GitCompare strokeWidth={1.8} />
-              COMPARE
-            </button>
-          </div>
-        </header>
+        <PageHead
+          tier="pr"
+          eyebrow="Fetch-X · School Console"
+          title={user?.role === 'vice_principal' ? 'Vice-Principal Dashboard' : 'Principal Dashboard'}
+          subtitle={booting
+            ? 'Crunching school data…'
+            : `${roleNoun} · School-wide academic intelligence for the ${SCHOOL} campus`}
+          searchSlot={(
+            <GlobalSearch
+              inputRef={gsRef}
+              classesAll={classesAll || []}
+              teachers={teachers || []}
+              subjects={termAvg?.subjects || []}
+              placeholder={searchPlaceholder}
+              onOpenClass={openClass}
+              onOpenStudent={openReport}
+              onOpenTeacher={openTeacher}
+              onOpenSubject={openSubject}
+            />
+          )}
+          actions={(
+            <>
+              <button
+                type="button"
+                className="btn-mode"
+                onClick={toggle}
+                title={mode === 'dark' ? 'Light mode' : 'Dark mode'}
+                aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {mode === 'dark' ? <Sun strokeWidth={2} /> : <Moon strokeWidth={2} />}
+              </button>
+              <button type="button" className="btn-aperf" onClick={() => setShowAperf(true)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 20 7 20 17 12 22 4 17 4 7" /><polygon points="12 8 15.5 10 15.5 14 12 16 8.5 14 8.5 10" /></svg>
+                ACADEMIC PERFORMANCE
+              </button>
+              <button type="button" className="btn-compare" onClick={() => setShowCompare(true)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5" /><path d="M5 15h-.5A2.5 2.5 0 0 1 2 12.5v-8A2.5 2.5 0 0 1 4.5 2h8A2.5 2.5 0 0 1 15 4.5V5" /></svg>
+                COMPARE
+              </button>
+            </>
+          )}
+        />
 
         {view === 'dash' && (
           <div id="dashView">
+            {/* v16 tier device: TIER 01 · SCHOOL band fused to the level stack */}
+            <Tier tier="pr" id="tierPR">
+              <TierBand
+                tier="pr"
+                lvl={1}
+                icon={TIER_ICONS.pr}
+                eyebrow="TIER 01 · SCHOOL"
+                copy={`Everything happening inside ${SCHOOL}, the flagship campus.`}
+                tag={stats
+                  ? `${SCHOOL} · ${stats.classes} CLASSES · ${stats.students} STUDENTS`.toUpperCase()
+                  : `${SCHOOL.toUpperCase()} · SCHOOL OVERVIEW`}
+              />
             <SectionSchool
               stats={stats} statsErr={statsErr} termAvg={termAvg} distro={distro} rank={rank}
+              school={SCHOOL}
               attPoints={attPoints} attRange={attRange} onAttRange={changeAttRange}
               cmpClasses={cmpClasses} cmpMetric={cmpMetric} onCmpMetric={changeCmpMetric}
               cmpSubjects={termAvg?.subjects || []}
               onOpenClass={openClass}
             />
-            <SectionSubjects termAvg={termAvg} onOpenSubject={openSubject} />
+            <SectionSubjects termAvg={termAvg} onOpenSubject={openSubject} school={SCHOOL} />
             <SectionClasses
               classesAll={classesAll}
               classes={classesList}
@@ -455,12 +509,17 @@ export default function PrincipalDashboard() {
               savedIds={savedIds}
               onBookmark={onBookmark}
               listRef={listRef}
+              school={SCHOOL}
+              exportCsv={exportStudentsCsv}
+              onExported={(n) => showToast(`${n} students exported as CSV`, 'success')}
+              onExportError={() => showToast('The CSV export failed — try again', 'error')}
             />
             <SectionTeachers
               teachers={teachers}
               loading={!teachers}
               onOpenTeacher={openTeacher}
             />
+            </Tier>
           </div>
         )}
 

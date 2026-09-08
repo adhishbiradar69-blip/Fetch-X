@@ -1,0 +1,53 @@
+Fetch-X — Full Project Archive (sandbox export)
+Generated: 2026-09-07 (Asia/Kolkata)
+
+WHAT IS THIS
+============
+The complete Fetch-X repository (backend + frontend + docs + qa),
+INCLUDING the full .git history with 7 local commits that are NOT yet
+on GitHub (origin/main = 7c46ae3).
+
+The 7 unpushed commits (local main, newest first):
+  1. feat(ai+export): AI follow-ups with real conversation memory, timetable CSV/print, per-term compare CSV
+  2. feat(export): print stylesheet + PRINT buttons on report/compare modals, compare CSV, AD staff CSV, focus rings
+  3. feat(console): CSV export parity across PR/CT + saved-folder export + collapsed-rail group dots
+  4. feat(console): CSV export for CP/AD rosters + AI markdown numbering fix + v16 empty states
+  5. feat(public): About/Terms/Privacy rebuilt on the v16 landing vocabulary + sign-out flow fix
+  6. feat(ui): v16 designer port — all five role surfaces rebuilt on the Sep 7 prototypes, wired to real data
+  7. docs: AI v3 — AI_FEATURE_PROMPTS + README/INTRODUCTION (VCP demo account, AI endpoints, AI pages)
+
+HOW TO PUSH THEM TO GITHUB
+==========================
+Option A — you already have a clone with the same patches applied:
+    git pull --rebase origin main   # make sure you're current
+    # then just push your own commits instead
+
+Option B — use THIS archive as the source of truth:
+    unzip Fetch-X-full-project.zip
+    cd Fetch-X
+    git remote set-url origin https://github.com/adhishbiradar69-blip/Fetch-X.git
+    git push origin main            # authenticates with YOUR credentials
+
+Option C — patch files only (also available):
+    0001..0007 patches are in the same download folder you got this from;
+    cd <your clone> && git am 000*.patch && git push
+
+RUN IT LOCALLY
+==============
+    bash fx-up.sh        # starts backend (:8000) + preview shim (:3010)
+    # or the classic route:
+    cd backend && pip install -r requirements.txt && uvicorn main:app --port 8000
+    cd frontend && npm install && npm run dev
+
+DEMO LOGINS
+===========
+    chairperson@schoolai.test / chair123          (Chairperson)
+    principal@greenwood.test / principal123       (Principal)
+    teacher1.greenwood@schoolai.test / teacher123 (Class Teacher)
+    greenwood@admin.test / school123              (Admin)
+    root.schoolai@nexus-secure.internal / admin123 (Super Admin)
+
+NOTE: history was rebuilt from the exported patches after a sandbox reset,
+so commit SHAs differ from the originals (same content, same messages,
+same order). Never force-push; if GitHub ever shows a divergence, prefer
+rebase over rewrite.

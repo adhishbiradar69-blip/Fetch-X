@@ -1,10 +1,6 @@
-import { motion } from 'framer-motion';
-import { FileText } from 'lucide-react';
-import { EASE } from '../../lib/motion.jsx';
-
-/* Fetch-X Terms of Service — realistic legal-ish copy.
-   Sections: Acceptance, Accounts, Acceptable Use, Privacy, Disclaimers,
-   Limitation of Liability, Changes, Contact. */
+/* Fetch-X /terms — v16 rebuild on the landing's design vocabulary
+   (Public16Shell + .lx-root classes). The legal copy below is unchanged. */
+import Public16Shell, { PubSection } from './Public16Shell';
 
 const SECTIONS = [
   {
@@ -79,45 +75,26 @@ const SECTIONS = [
   },
 ];
 
-const field = (delay) => ({
-  initial: { opacity: 0, y: 24 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.6, ease: EASE, delay },
-});
-
 export default function Terms() {
   return (
-    <div className="public-page legal-page">
-      <motion.section className="public-hero" {...field(0)}>
-        <span className="public-hero-badge"><FileText size={14} /> Legal</span>
-        <h1>Terms of Service</h1>
-        <p className="public-hero-sub">
-          Last updated: {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-        </p>
-      </motion.section>
-
-      <div className="legal-body glass">
-        <nav className="legal-toc">
-          {SECTIONS.map(s => (
-            <a key={s.id} href={`#${s.id}`}>{s.title}</a>
-          ))}
-        </nav>
-
-        {SECTIONS.map((s, i) => (
-          <motion.section
-            key={s.id}
-            id={s.id}
-            className="legal-section"
-            initial={{ opacity: 0, y: 16 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-60px' }}
-            transition={{ duration: 0.4, ease: EASE, delay: Math.min(i * 0.04, 0.3) }}
-          >
-            <h2>{s.title}</h2>
-            {s.body.map((p, j) => <p key={j}>{p}</p>)}
-          </motion.section>
-        ))}
-      </div>
-    </div>
+    <Public16Shell title="Terms">
+      <PubSection
+        eyebrow="LEGAL"
+        title="Terms of Service"
+        lead="The ground rules for using Fetch-X — accounts, acceptable use, and where the platform's responsibilities begin and end."
+      />
+      {SECTIONS.map((s) => (
+        <section key={s.id} id={s.id} className="rv" style={{ padding: '0 0 26px' }}>
+          <div className="wrap">
+            <div className="card legal-card" style={{ padding: '22px 26px', borderRadius: 16 }}>
+              <h2 style={{ fontFamily: "'Lora', Georgia, serif", fontSize: 19, fontWeight: 600, color: 'var(--ink)', margin: 0 }}>{s.title}</h2>
+              {s.body.map((p, j) => (
+                <p key={j} style={{ marginTop: j === 0 ? 10 : 8, fontSize: 13.5, lineHeight: 1.75, color: 'var(--body)' }}>{p}</p>
+              ))}
+            </div>
+          </div>
+        </section>
+      ))}
+    </Public16Shell>
   );
 }

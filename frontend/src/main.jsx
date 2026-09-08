@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { MotionConfig } from 'framer-motion'
 import './index.css'
 import './motion.css'
+import './styles/print.css'
 import App from './App.jsx'
 import PreferencesProvider, { usePrefs } from './components/ThemeProvider.jsx'
 

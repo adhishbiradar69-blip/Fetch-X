@@ -1,10 +1,13 @@
 /* eslint-disable react-refresh/only-export-components -- RANK_TABS is a
    shared constant colocated with the tabs component, same as charts.jsx. */
 /* The five .lvl sections of the dashboard (School, Subject, Class, Student,
-   Teachers) — markup mirrors dashboard(2).html v15:
+   Teachers) — markup mirrors principal.html v16 (level numbers, head copy
+   and tags from designer lines 806-898; ids keep the app's schoolSec /
+   subjectSec / classSec / studentSec / teacherSec so navGo scrolling keeps
+   working):
    • subject cards are CLICKABLE → #subject=<id> detail view
    • class comparison tabs = OVERALL + per-subject metrics (v15)
-   • student + teacher levels get rank-band filter tabs (v15)
+   • student + teacher levels get rank-band filter tabs (.rank-tabs, v16)
    • section heads can carry a theme swatch button (v15 level themes). */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -13,11 +16,15 @@ import {
 import { Donut, Distro, BarChart, LineChart, Trend, useReveal, useInView } from './charts';
 import { ATT_TABS, initials, pct } from './util';
 import { ThemeBtn } from './LevelThemes';
+import ExportCsvButton from '../../../components/v16/ExportCsvButton';
+import EmptyState from '../../../components/v16/EmptyState';
+import { csvStamp } from '../../../lib/csv';
 
 /* ---------------------------------------------- small building blocks */
-export function SectionHead({ title, sub, tag, actions, lvl }) {
+export function SectionHead({ num, title, sub, tag, actions, lvl }) {
   return (
     <header className="lvl-head">
+      {num && <span className="lvl-num">{num}</span>}
       <div className="lvl-tt"><h2>{title}</h2><p>{sub}</p></div>
       <span className="lvl-rule" />
       {tag && <span className="lvl-tag">{tag}</span>}
@@ -78,7 +85,7 @@ export function RankTabs({ value, onChange }) {
 
 /* ============================================================ 01 SCHOOL */
 export function SectionSchool({
-  stats, statsErr, termAvg, distro, rank,
+  stats, statsErr, termAvg, distro, rank, school,
   attPoints, attRange, onAttRange, attLoading,
   cmpClasses, cmpMetric, onCmpMetric, cmpLoading, cmpSubjects, onOpenClass,
 }) {
@@ -115,9 +122,12 @@ export function SectionSchool({
     <section className={`lvl lvl-1 first rv${secIn ? ' in' : ''}`} id="schoolSec" ref={secRef}>
       <SectionHead
         lvl={1}
+        num="01"
         title="School Level"
-        sub="The entire school at a glance: all terms, all classes, all subjects combined."
-        tag={rank ? `RANKED #${rank.rank} OF ${rank.of} SCHOOLS` : 'ALL CLASSES · ALL TERMS'}
+        sub="The entire school at a glance — all terms, all classes, all subjects combined."
+        tag={rank
+          ? `GROUP RANK #${rank.rank} / ${rank.of}${school ? ` · ${String(school).toUpperCase()}` : ''}`
+          : 'ALL CLASSES · ALL TERMS'}
       />
       <div className="school-strip">
         <div className="card card-op fade">
@@ -200,16 +210,17 @@ export function SectionSchool({
 }
 
 /* =========================================================== 02 SUBJECT */
-export function SectionSubjects({ termAvg, onOpenSubject }) {
+export function SectionSubjects({ termAvg, onOpenSubject, school }) {
   const subjects = termAvg?.subjects || [];
   const [secRef, secIn] = useInView();
   return (
     <section className={`lvl lvl-2 rv${secIn ? ' in' : ''}`} id="subjectSec" ref={secRef}>
       <SectionHead
         lvl={2}
+        num="02"
         title="Subject Level"
-        sub="How each subject performs across the whole school, term by term. Click a subject to open it."
-        tag={subjects.length ? `${subjects.length} SUBJECTS · RANKED #1–#${subjects.length}` : 'SUBJECTS'}
+        sub={`Each subject at ${school || 'the school'} — head of department and class-by-class average.`}
+        tag={subjects.length ? `${subjects.length} SUBJECTS · CLICK FOR DETAIL` : 'SUBJECTS'}
       />
       {!termAvg ? (
         <div className="subject-grid">{[0, 1, 2, 3, 4, 5].map((i) => <Skel key={i} h={104} />)}</div>
@@ -303,9 +314,10 @@ export function SectionClasses({
     <section className={`lvl lvl-3 rv${secIn ? ' in' : ''}`} id="classSec" ref={secRef}>
       <SectionHead
         lvl={3}
+        num="03"
         title="Class Level"
-        sub="Every section from Grade 1 to 10. Click any class to open its full dashboard."
-        tag={classesAll ? `${grades.length} GRADES · ${total} SECTIONS` : 'CLASSES'}
+        sub={`All ${total || '—'} classes, grouped by grade. Click any class for its full report.`}
+        tag={classesAll ? `${total} CLASSES · ${grades.length} GRADES` : 'CLASSES'}
       />
       <div className="grade-tabs">
         <button type="button" className={`gtab${grade === 'all' ? ' active' : ''}`} onClick={() => onGrade('all')}>ALL</button>
@@ -385,10 +397,22 @@ export function SectionTeachers({ teachers, loading, onOpenTeacher }) {
   }, [teachers, ql, minAvg]);
   const [secRef, secIn] = useInView();
 
+  /* EXPORT CSV — the CURRENT filtered faculty view (already fully loaded;
+     the teachers endpoint is one small per-school list). */
+  const exportTeachersCsv = async () => ({
+    filename: `fetchx-school-teachers-${csvStamp()}.csv`,
+    headers: ['RANK', 'TEACHER NAME', 'SUBJECT', 'CLASS AVG %', 'ROLES'],
+    rows: rows.map((t) => [
+      t.rank ?? '', t.name, t.subject || '', t.avg != null ? pct(t.avg) : '',
+      [t.is_hod ? 'HOD' : '', t.is_ct ? 'CT' : ''].filter(Boolean).join('+'),
+    ]),
+  });
+
   return (
     <section className={`lvl lvl-6 rv${secIn ? ' in' : ''}`} id="teacherSec" ref={secRef}>
       <SectionHead
         lvl={6}
+        num="05"
         title="Teachers Level"
         sub="Academic faculty ranked by average class performance."
         tag={teachers != null
@@ -410,6 +434,7 @@ export function SectionTeachers({ teachers, loading, onOpenTeacher }) {
             ? `${rows.length} ${ql || minAvg ? `MATCH${rows.length === 1 ? '' : 'ES'}` : 'TEACHERS'}`
             : '…'}
         </span>
+        <ExportCsvButton fetcher={exportTeachersCsv} disabled={!rows.length} />
       </div>
       <div className="st-list-wrap fade">
         <div className="st-scroll">
@@ -477,7 +502,7 @@ function StudentRow({ s, saved, onOpen, onBookmark }) {
 
 export function SectionStudents({
   query, onQuery, rows, total, loading, loadingMore, onMore, onOpenReport,
-  savedIds, onBookmark, listRef, minAvg, onMinAvg,
+  savedIds, onBookmark, listRef, minAvg, onMinAvg, school, exportCsv, onExported, onExportError,
 }) {
   const sentinelRef = useRef(null);
   const [secRef, secIn] = useInView();
@@ -493,17 +518,16 @@ export function SectionStudents({
     return () => io.disconnect();
   }, [onMore, listRef, rows.length]);
 
-  const bandLabel = minAvg ? `${rows.length} STUDENT${rows.length === 1 ? '' : 'S'}` : null;
-
   return (
     <section className={`lvl lvl-4 rv${secIn ? ' in' : ''}`} id="studentSec" ref={secRef}>
       <SectionHead
         lvl={4}
-        title="Student Level"
-        sub="Every student in the school, ranked by their all-term average score."
-        tag={bandLabel
-          ? `${bandLabel} · CLICK FOR REPORT CARD`
-          : total != null ? `${total} STUDENTS · CLICK FOR REPORT CARD` : 'CLICK A STUDENT FOR REPORT CARD'}
+        num="04"
+        title="Students Level"
+        sub={`Every student across all classes in ${school || 'the school'}, ranked by their all-term average.`}
+        tag={minAvg
+          ? `${rows.length} STUDENTS · SCHOOL RANK`
+          : total != null ? `${total} STUDENTS · SCHOOL RANK` : 'SCHOOL RANK'}
       />
       <RankTabs value={String(minAvg ?? 0)} onChange={(v) => onMinAvg(v === 'all' ? 0 : Number(v))} />
       <div className="searchbar fade">
@@ -518,6 +542,14 @@ export function SectionStudents({
         <span className="count">
           {total != null ? `${total} ${query || minAvg ? `MATCH${total === 1 ? '' : 'ES'}` : 'STUDENTS'}` : '…'}
         </span>
+        {exportCsv && (
+          <ExportCsvButton
+            fetcher={exportCsv}
+            disabled={!total}
+            onDone={onExported}
+            onError={onExportError}
+          />
+        )}
       </div>
       <div className="st-list-wrap fade">
         <div className="st-scroll" ref={listRef}>
@@ -544,7 +576,12 @@ export function SectionStudents({
                 />
               ))}
               {loadingMore && <div className="pd-note">Loading more…</div>}
-              {!rows.length && !loading && <div className="noresult">No students match your search.</div>}
+              {!rows.length && !loading && (
+                <EmptyState
+                  title="No students match this filter"
+                  hint="Try a different name or rank band — or clear the search."
+                />
+              )}
               <div ref={sentinelRef} />
             </>
           )}

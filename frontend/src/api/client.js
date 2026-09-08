@@ -7,6 +7,22 @@ const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({ baseURL: API_URL });
 
+/* Sandbox/single-port gateway preview: when the app is served behind a
+   gateway that routes by an XTransformPort query param (dev-only setup),
+   build with VITE_XPORT set and every API call is tagged so the gateway
+   forwards it to this app's server. Unset (normal local dev + production
+   builds) this interceptor is never even registered — zero effect. */
+const XTP = import.meta.env.VITE_XPORT;
+if (XTP) {
+  api.interceptors.request.use((config) => {
+    const url = typeof config.url === 'string' ? config.url : '';
+    if (url && !url.includes('XTransformPort=')) {
+      config.url = `${url}${url.includes('?') ? '&' : '?'}XTransformPort=${XTP}`;
+    }
+    return config;
+  });
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) {
@@ -34,12 +50,18 @@ api.interceptors.response.use(
     // handles it; destroying the session here used to log class teachers
     // out of the console whenever a leadership-only endpoint was hit.
     if (!isAuthCall && error.response?.status === 401) {
+      let hadToken = false;
       try {
+        hadToken = !!localStorage.getItem('token');
         localStorage.removeItem('token');
         localStorage.removeItem('user');
       } catch { /* ignore */ }
+      // An intentional SIGN OUT removes the token first — late 401s from
+      // requests already in flight must not yank the user off the landing
+      // page they just returned to.
+      if (!hadToken) return Promise.reject(error);
       if (!window.location.pathname.startsWith('/auth') && !window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login';
+        window.location.href = XTP ? `/login?XTransformPort=${XTP}` : '/login';
       }
     }
     return Promise.reject(error);

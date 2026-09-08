@@ -1,10 +1,6 @@
-import { motion } from 'framer-motion';
-import { Shield } from 'lucide-react';
-import { EASE } from '../../lib/motion.jsx';
-
-/* Fetch-X Privacy Policy — realistic legal-ish copy.
-   Sections: Information We Collect, How We Use It, Data Security, Student Data,
-   Cookies, Your Rights, Children's Privacy, Changes, Contact. */
+/* Fetch-X /privacy — v16 rebuild on the landing's design vocabulary
+   (Public16Shell + .lx-root classes). The policy copy below is unchanged. */
+import Public16Shell, { PubSection } from './Public16Shell';
 
 const SECTIONS = [
   {
@@ -96,45 +92,37 @@ const SECTIONS = [
   },
 ];
 
-const field = (delay) => ({
-  initial: { opacity: 0, y: 24 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.6, ease: EASE, delay },
-});
-
 export default function Privacy() {
   return (
-    <div className="public-page legal-page">
-      <motion.section className="public-hero" {...field(0)}>
-        <span className="public-hero-badge"><Shield size={14} /> Legal</span>
-        <h1>Privacy Policy</h1>
-        <p className="public-hero-sub">
-          Last updated: {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-        </p>
-      </motion.section>
-
-      <div className="legal-body glass">
-        <nav className="legal-toc">
-          {SECTIONS.map(s => (
-            <a key={s.id} href={`#${s.id}`}>{s.title}</a>
-          ))}
-        </nav>
-
-        {SECTIONS.map((s, i) => (
-          <motion.section
-            key={s.id}
-            id={s.id}
-            className="legal-section"
-            initial={{ opacity: 0, y: 16 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-60px' }}
-            transition={{ duration: 0.4, ease: EASE, delay: Math.min(i * 0.04, 0.3) }}
-          >
-            <h2>{s.title}</h2>
-            {s.body.map((p, j) => <p key={j}>{p}</p>)}
-          </motion.section>
-        ))}
-      </div>
-    </div>
+    <Public16Shell title="Privacy">
+      <PubSection
+        eyebrow="PRIVACY"
+        title="Privacy first, always"
+        lead="What Fetch-X collects, how it is protected, and the rights your school and its people keep."
+      >
+        {/* designer .priv block as the lead-in */}
+        <div className="priv">
+          <div className="fic">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z" /><path d="M9 12l2 2 4-4.5" /></svg>
+          </div>
+          <div>
+            <h3>No trackers, no data sale</h3>
+            <p>This demo runs entirely in your browser — no accounts are created, no data leaves your device, and no third-party trackers are used. Saved students, folders, and theme preferences live in local storage and stay under your control.</p>
+          </div>
+        </div>
+      </PubSection>
+      {SECTIONS.map((s) => (
+        <section key={s.id} id={s.id} className="rv" style={{ padding: '0 0 26px' }}>
+          <div className="wrap">
+            <div className="card legal-card" style={{ padding: '22px 26px', borderRadius: 16 }}>
+              <h2 style={{ fontFamily: "'Lora', Georgia, serif", fontSize: 19, fontWeight: 600, color: 'var(--ink)', margin: 0 }}>{s.title}</h2>
+              {s.body.map((p, j) => (
+                <p key={j} style={{ marginTop: j === 0 ? 10 : 8, fontSize: 13.5, lineHeight: 1.75, color: 'var(--body)' }}>{p}</p>
+              ))}
+            </div>
+          </div>
+        </section>
+      ))}
+    </Public16Shell>
   );
 }

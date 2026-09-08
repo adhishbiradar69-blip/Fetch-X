@@ -90,6 +90,21 @@ body.dark .dsb-brand .nm b { background: linear-gradient(90deg, #8b7cf6, #b7acff
   transition: opacity .15s; z-index: 60;
 }
 .v15-root.nav-collapsed .dsb-nav a:hover::after, .v15-root.nav-collapsed .dsb-nav button:hover::after { opacity: 1; }
+/* group labels (g-dot rows): the designer hides them when collapsed —
+   keep the tier-colored g-dot as a section anchor instead, hover reveals
+   the group name (same tooltip treatment as the icon-only links). */
+.v15-root.nav-collapsed .dsb-glabel {
+  position: relative; max-width: none; opacity: .8; padding: 8px 0 5px; justify-content: center;
+}
+.v15-root.nav-collapsed .dsb-glabel.active-tier { opacity: 1; }
+.v15-root.nav-collapsed .dsb-glabel::after {
+  content: attr(data-tip); position: absolute; left: calc(100% + 12px); top: 50%; transform: translateY(-50%);
+  background: var(--ink); color: var(--surf); font-size: 10px; font-weight: 700;
+  padding: 6px 10px; border-radius: 8px; white-space: nowrap; opacity: 0; pointer-events: none;
+  transition: opacity .15s; z-index: 60;
+}
+.v15-root.nav-collapsed .dsb-glabel:hover { opacity: 1; }
+.v15-root.nav-collapsed .dsb-glabel:hover::after { opacity: 1; }
 .dsb-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
 .dsb-sout {
   display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 10px;

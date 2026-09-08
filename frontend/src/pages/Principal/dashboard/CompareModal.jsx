@@ -4,10 +4,12 @@
    NEW POST /principal/compare endpoint; folders carry their member ids
    from localStorage. Winner highlight + "highest overall" note. */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { Download, Printer, Search, X } from 'lucide-react';
 import { compareEntities, fetchStudents } from './data';
 import { useReveal } from './charts';
 import { pct } from './util';
+import { csvStamp, downloadCsv } from '../../../lib/csv';
+import { printCardEl, printStamp } from './printCard';
 
 const CMP_MAX = 7;
 const CMP_COLORS = ['#4f42dd', '#0c7a6b', '#b45f04', '#c2255c', '#0e7490', '#9333ea', '#d97706'];
@@ -30,6 +32,8 @@ export default function CompareModal({ onClose, classesAll = [], folders = [] })
   const [students, setStudents] = useState(null);
   const [ents, setEnts] = useState([]); // [{key,type,id,name,color}]
   const [metrics, setMetrics] = useState(null); // resolved [{...ents, marks, attendance, tasks, overall}]
+  const [printBusy, setPrintBusy] = useState(false);
+  const cmpRef = useRef(null);
   const closeRef = useRef(null);
   const selRef = useRef(null);
 
@@ -104,7 +108,7 @@ export default function CompareModal({ onClose, classesAll = [], folders = [] })
       await compareEntities(payload)
         .then((d) => {
           if (!alive) return;
-          setMetrics((d.entities || []).map((m, i) => ({ ...m, color: ents[i]?.color })));
+          setMetrics((d.entities || []).map((m, i) => ({ ...m, color: ents[i]?.color, type: ents[i]?.type })));
         })
         .catch(() => { if (alive) setMetrics([]); });
     };
@@ -128,18 +132,60 @@ export default function CompareModal({ onClose, classesAll = [], folders = [] })
     );
   }
 
+  /* CSV export — the comparison sheet, same numbers as the bars, plus the
+     per-term marks axis the backend resolves for every entity (empty cell
+     when a term has no recorded marks — never a fake 0) */
+  const exportCsv = () => {
+    if (!metrics?.length) return;
+    downloadCsv(
+      `fetchx-compare-${csvStamp()}.csv`,
+      ['ENTITY', 'TYPE', 'MARKS %', 'ATTENDANCE %', 'TASK COMPLETION %', 'OVERALL %',
+        'TERM 1 MARKS %', 'TERM 2 MARKS %', 'TERM 3 MARKS %'],
+      metrics.map((m) => [
+        m.name || '', String(m.type || '').toUpperCase(),
+        Math.round(m.marks ?? 0), Math.round(m.attendance ?? 0),
+        Math.round(m.tasks ?? 0), Math.round(m.overall ?? 0),
+        m.t1 ?? '', m.t2 ?? '', m.t3 ?? '',
+      ]),
+    );
+  };
+
+  /* browser-print path — print.css scopes the sheet to this .cmp card */
+  const printCompare = async () => {
+    if (printBusy || !cmpRef.current || !metrics?.length) return;
+    setPrintBusy(true);
+    await printCardEl(cmpRef.current, `COMPARISON · ${metrics.length} ENTITIES · GENERATED ${printStamp()}`);
+    setPrintBusy(false);
+  };
+
   return (
     <div className="modal-backdrop open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="cmp">
+      <div className="cmp" ref={cmpRef}>
         <div className="rep-head" style={{ marginBottom: 0 }}>
           <div>
             <div className="eyebrow">FETCH-X</div>
             <h2>Compare</h2>
             <div className="subtitle">Add up to {CMP_MAX} entities — each becomes a bar in every metric group.</div>
           </div>
-          <button ref={closeRef} type="button" className="btn-close" onClick={onClose} aria-label="Close">
-            <X strokeWidth={2.4} />
-          </button>
+          <div className="rep-tools">
+            <button
+              type="button" className="exe" onClick={exportCsv}
+              disabled={!metrics?.length}
+              title="Download the comparison as a CSV file"
+            >
+              <Download strokeWidth={2.4} aria-hidden="true" /><span>EXPORT CSV</span>
+            </button>
+            <button
+              type="button" className="exe" onClick={printCompare}
+              disabled={!metrics?.length || printBusy}
+              title="Print the comparison sheet"
+            >
+              <Printer strokeWidth={2.4} aria-hidden="true" /><span>PRINT</span>
+            </button>
+            <button ref={closeRef} type="button" className="btn-close" onClick={onClose} aria-label="Close">
+              <X strokeWidth={2.4} />
+            </button>
+          </div>
         </div>
 
         <div className="cmp-row" style={{ marginTop: 14 }}>

@@ -3,14 +3,23 @@
    teacher report: identity strip, term averages, exam-trend line chart,
    class comparison double-bars (click to open class), trio stats,
    class grid and the ranked student cohort (hidden from PDF export).
-   Reuses the .report kit so both report modals look identical. */
+   Reuses the .report kit so both report modals look identical.
+
+   v16: term toggle (.rep-terms / .report.term-mode) — ALL TERM keeps the
+   composite view; TERM 1/2/3 aggregates are computed CLIENT-SIDE (series
+   points carry `term`, classes carry t1/t2/t3) and the card re-bands to the
+   term average. Students cohort stays all-term (the payload has no
+   per-term student scores). */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Award, Bookmark, ClipboardCheck, Download, School, Trophy, UserCheck, Users, X,
+  Award, Bookmark, ClipboardCheck, Download, Printer, School, Trophy, UserCheck, Users, X,
 } from 'lucide-react';
+import { printCardEl, printStamp } from './printCard';
 import { fetchTeacherReport } from './data';
-import { Donut, GroupedBars, LineChart, Trend } from './charts';
-import { bandOf, initials, pct } from './util';
+import { BarChart, Donut, GroupedBars, LineChart, Trend } from './charts';
+import { bandOf, initials, mean, pct } from './util';
+
+const TERM_KEYS = ['t1', 't2', 't3'];
 
 function RepStat({ label, chips, all, C }) {
   return (
@@ -36,7 +45,9 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
   const [rep, setRep] = useState(null);
   const [err, setErr] = useState(false);
   const [kidQ, setKidQ] = useState('');
+  const [term, setTerm] = useState('all'); // 'all' | '0' | '1' | '2' (v16)
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [printBusy, setPrintBusy] = useState(false);
   const cardRef = useRef(null);
   const closeRef = useRef(null);
 
@@ -46,6 +57,7 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
       setRep(null);
       setErr(false);
       setKidQ('');
+      setTerm('all');
       if (teacherId == null) return;
       try {
         const r = await (fetcher || fetchTeacherReport)(teacherId);
@@ -87,19 +99,65 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
     return list.filter((s) => s.name.toLowerCase().includes(ql) || s.class_name.toLowerCase().includes(ql));
   }, [rep, ql]);
 
+  /* ---- v16 term mode: per-term aggregates computed CLIENT-SIDE ----------
+     series points carry `term` (1/2/3); classes carry t1/t2/t3 columns. */
+  const termAvgT = useMemo(() => {
+    if (!rep || term === 'all') return null;
+    const idx = Number(term); // 0 | 1 | 2
+    const pts = (rep.series || [])
+      .filter((p) => Number(p.term) === idx + 1)
+      .map((p) => p.pct)
+      .filter(Number.isFinite);
+    if (pts.length) return Math.round(mean(pts));
+    const vals = (rep.classes || [])
+      .map((c) => c[TERM_KEYS[idx]])
+      .filter(Number.isFinite);
+    return vals.length ? Math.round(mean(vals)) : null;
+  }, [rep, term]);
+
+  const termBarItems = useMemo(() => {
+    if (!rep || term === 'all') return [];
+    const idx = Number(term);
+    const k = TERM_KEYS[idx];
+    return (rep.classes || [])
+      .filter((c) => c[k] != null)
+      .map((c) => ({
+        key: c.id,
+        label: c.name,
+        tip: `Class ${c.name} · Term ${idx + 1}: ${pct(c[k])}% ${String(rep.teacher?.subject || '').toLowerCase()} avg · click to open`,
+        val: pct(c[k]),
+      }))
+      .sort((a, b) => b.val - a.val);
+  }, [rep, term]);
+
   if (teacherId == null) return null;
 
   const t = rep?.teacher;
-  const g = t && t.avg != null ? bandOf(pct(t.avg)) : null;
+  const isAll = term === 'all';
+  const ti = isAll ? -1 : Number(term); // 0 | 1 | 2
+  const tKey = isAll ? null : TERM_KEYS[ti];
+  /* term band falls back to the all-term average when a term has no marks */
+  const shownAvg = isAll ? t?.avg : (termAvgT ?? t?.avg ?? null);
+  const g = shownAvg != null ? bandOf(pct(shownAvg)) : null;
   const C = g?.c;
 
   const best = sortedByAvg[0];
   const focus = sortedByAvg.length > 1 ? sortedByAvg[sortedByAvg.length - 1] : null;
+  const termSorted = !isAll
+    ? [...classes].filter((c) => c[tKey] != null).sort((a, b) => b[tKey] - a[tKey])
+    : [];
+  const termBest = termSorted.length ? termSorted[0] : null;
+  const termFocus = termSorted.length ? termSorted[termSorted.length - 1] : null;
 
   const chipsOf = (c) => [
     ['T1', c?.t1 != null ? `${pct(c.t1)}%` : '—'],
     ['T2', c?.t2 != null ? `${pct(c.t2)}%` : '—'],
     ['T3', c?.t3 != null ? `${pct(c.t3)}%` : '—'],
+  ];
+  /* v16 term-mode chips: the term value + the (all-term) task completion */
+  const chipTerm = (c) => [
+    [`T${ti + 1}`, c?.[tKey] != null ? `${pct(c[tKey])}%` : '—'],
+    ['TASK', c?.tasks_pct != null ? `${pct(c.tasks_pct)}%` : '—'],
   ];
 
   /* ---- PDF export (same pipeline as the report card, skips students) --- */
@@ -155,7 +213,7 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
         y += sh;
       }
       const nm = (t?.name || 'teacher').replace(/\s+/g, '-');
-      pdf.save(`Teacher-Report-${nm}-${t?.subject || ''}.pdf`);
+      pdf.save(`Teacher-Report-${nm}-${t?.subject || ''}${isAll ? '' : `-T${ti + 1}`}.pdf`);
     } catch (pdfErr) {
       card.classList.remove('force-light');
       console.warn(
@@ -182,7 +240,7 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className="report"
+        className={`report${isAll ? '' : ' term-mode'}`}
         ref={cardRef}
         style={g ? { '--lvlD': C, '--lvlSoft': g.soft, '--donut': C, '--bar': C } : undefined}
       >
@@ -210,7 +268,9 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
               </div>
               <div className="rep-ranks">
                 <span className="grade-pill" style={{ background: g.soft, color: C }}>
-                  {t.avg != null ? `${pct(t.avg)}% · ${g.label}` : 'NO MARKS YET'}
+                  {isAll
+                    ? (t.avg != null ? `${pct(t.avg)}% · ${g.label}` : 'NO MARKS YET')
+                    : (termAvgT != null ? `TERM ${ti + 1} · ${termAvgT}% · ${g.label}` : `TERM ${ti + 1} · NO MARKS YET`)}
                 </span>
                 <div className="bigrank">
                   <span className="pill" style={{ background: C }}>
@@ -221,31 +281,92 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
                 <button type="button" className="btn-close" title="Download as PDF (skips students list)" disabled={pdfBusy} onClick={exportPdf}>
                   <Download strokeWidth={2} />
                 </button>
-                <button ref={closeRef} type="button" className="btn-close" title="Close report" disabled={pdfBusy} onClick={onClose}>
+                <button
+                  type="button"
+                  className="btn-close"
+                  title="Print report"
+                  disabled={printBusy || pdfBusy}
+                  onClick={async () => {
+                    if (printBusy || pdfBusy || !cardRef.current || !rep) return;
+                    setPrintBusy(true);
+                    await printCardEl(
+                      cardRef.current,
+                      `FACULTY REPORT · ${String(t.name || '—').toUpperCase()}`
+                      + ` · ${String(t.subject || '—').toUpperCase()}`
+                      + ` · ${isAll ? 'ALL TERM' : `TERM ${ti + 1}`}`
+                      + ` · GENERATED ${printStamp()}`,
+                    );
+                    setPrintBusy(false);
+                  }}
+                >
+                  <Printer strokeWidth={2} />
+                </button>
+                <button ref={closeRef} type="button" className="btn-close" title="Close report" disabled={pdfBusy || printBusy} onClick={onClose}>
                   <X strokeWidth={2.4} />
                 </button>
               </div>
             </div>
 
+            {/* v16 term toggle — ALL TERM / TERM 1 / TERM 2 / TERM 3 */}
+            <div className="rep-terms" role="tablist" aria-label="Report term">
+              {['all', '0', '1', '2'].map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`gtab${term === k ? ' active' : ''}`}
+                  onClick={() => setTerm(k)}
+                >
+                  {k === 'all' ? 'ALL TERM' : `TERM ${Number(k) + 1}`}
+                </button>
+              ))}
+            </div>
+
             <div className="school-strip">
-              <div className="card card-op">
-                <div className="label">TEACHING PERFORMANCE (ALL TERMS)</div>
-                <div className="op-stats">
-                  <div
-                    className="op-stat"
-                    title={`Average ${t.subject} scores across the ${t.classes} classes taught`}
-                  >
-                    <div className="k">ALL TERM<br />AVERAGE</div>
-                    <Donut value={t.avg ?? 0} variant="d-md" />
-                  </div>
-                  {['t1', 't2', 't3'].map((k, i) => (
-                    <div className="op-stat" key={k}>
-                      <div className="k">TERM {i + 1}<br />CLASS AVG</div>
-                      <div className="v">{t[k] != null ? `${pct(t[k])}%` : '—'}</div>
+              {isAll ? (
+                <div className="card card-op">
+                  <div className="label">TEACHING PERFORMANCE (ALL TERMS)</div>
+                  <div className="op-stats">
+                    <div
+                      className="op-stat"
+                      title={`Average ${t.subject} scores across the ${t.classes} classes taught`}
+                    >
+                      <div className="k">ALL TERM<br />AVERAGE</div>
+                      <Donut value={t.avg ?? 0} variant="d-md" />
                     </div>
-                  ))}
+                    {['t1', 't2', 't3'].map((k, i) => (
+                      <div className="op-stat" key={k}>
+                        <div className="k">TERM {i + 1}<br />CLASS AVG</div>
+                        <div className="v">{t[k] != null ? `${pct(t[k])}%` : '—'}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="card card-op">
+                  <div className="label">TERM {ti + 1} PERFORMANCE</div>
+                  <div className="op-stats">
+                    <div
+                      className="op-stat"
+                      title={`Average ${t.subject} scores across the ${classes.length} classes taught in Term ${ti + 1}`}
+                    >
+                      <div className="k">TERM {ti + 1}<br />CLASS AVG</div>
+                      <Donut value={termAvgT ?? 0} variant="d-md" />
+                    </div>
+                    <div className="op-stat">
+                      <div className="k">TOP CLASS<br />TERM {ti + 1}</div>
+                      <div className="v" style={{ fontSize: 12 }}>{termBest ? `${termBest.name} · ${pct(termBest[tKey])}%` : '—'}</div>
+                    </div>
+                    <div className="op-stat">
+                      <div className="k">NEEDS FOCUS<br />TERM {ti + 1}</div>
+                      <div className="v" style={{ fontSize: 12 }}>{termFocus ? `${termFocus.name} · ${pct(termFocus[tKey])}%` : '—'}</div>
+                    </div>
+                    <div className="op-stat">
+                      <div className="k">CLASSES<br />TAUGHT</div>
+                      <div className="v">{classes.length}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="card card-stats">
                 <div className="stat-cell">
                   <div className="ic"><School strokeWidth={1.8} /></div>
@@ -287,18 +408,27 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
               </div>
               <div className="card chart-card">
                 <div className="chead">
-                  <span className="label">CLASS COMPARISON · {String(t.subject || '').toUpperCase()} vs TASKS · {classes.length} CLASSES · CLICK TO OPEN</span>
-                  <span className="blwrap">
-                    <span className="bl"><i /></span>SUBJECT AVG
-                    <span className="bl b"><i /></span>TASKS
+                  <span className="label">
+                    {isAll
+                      ? `CLASS COMPARISON · ${String(t.subject || '').toUpperCase()} vs TASKS · ${classes.length} CLASSES · CLICK TO OPEN`
+                      : `CLASS COMPARISON · ${String(t.subject || '').toUpperCase()} · TERM ${ti + 1} · ${termBarItems.length} CLASSES · CLICK A BAR TO OPEN`}
                   </span>
+                  {isAll && (
+                    <span className="blwrap">
+                      <span className="bl"><i /></span>SUBJECT AVG
+                      <span className="bl b"><i /></span>TASKS
+                    </span>
+                  )}
                 </div>
                 <div className="cbody">
-                  <GroupedBars items={barItems} height={120} onClick={(i) => openClass(barItems[i].key)} />
+                  {isAll
+                    ? <GroupedBars items={barItems} height={120} onClick={(i) => openClass(barItems[i].key)} />
+                    : <BarChart items={termBarItems} height={120} onClick={(i) => openClass(termBarItems[i].key)} />}
                 </div>
               </div>
             </div>
 
+            {isAll && (
             <div className="rep-trio">
               <RepStat
                 label="CLASS AVERAGE (TERMS)"
@@ -319,10 +449,13 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
                 C={C}
               />
             </div>
+            )}
 
             <div className="rep-sub">
               <h3>Class Level</h3>
-              <span>{String(t.subject || '').toUpperCase()} · TERM SCORES + TASK COMPLETION · CLICK A CLASS TO OPEN</span>
+              <span>{isAll
+                ? `${String(t.subject || '').toUpperCase()} · TERM SCORES + TASK COMPLETION · CLICK A CLASS TO OPEN`
+                : `${String(t.subject || '').toUpperCase()} · TERM ${ti + 1} · CLICK A CLASS TO OPEN`}</span>
               <i />
             </div>
             <div className="subject-grid">
@@ -347,12 +480,12 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
                   </div>
                   <div className="s-body">
                     <div className="chips">
-                      {chipsOf(c).map(([k2, v]) => <div className="chip" key={k2}><span className="t">{k2}</span><span className="n">{v}</span></div>)}
-                      <div className="chip"><span className="t">TASK</span><span className="n">{pct(c.tasks_pct)}%</span></div>
+                      {(isAll ? [...chipsOf(c), ['TASK', `${pct(c.tasks_pct)}%`]] : chipTerm(c))
+                        .map(([k2, v]) => <div className="chip" key={k2}><span className="t">{k2}</span><span className="n">{v}</span></div>)}
                     </div>
                     <div className="avg-wrap">
-                      <span className="avg-label">AVG</span>
-                      <Donut value={c.avg ?? 0} variant="d-xs" />
+                      <span className="avg-label">{isAll ? 'AVG' : `T${ti + 1}`}</span>
+                      <Donut value={isAll ? (c.avg ?? 0) : (c[tKey] != null ? pct(c[tKey]) : 0)} variant="d-xs" />
                       <Trend d={c.t3 != null && c.t2 != null ? c.t3 - c.t2 : 0} />
                     </div>
                   </div>

@@ -1910,6 +1910,51 @@ def _student_avg_map(db: Session, school: School) -> dict[int, float]:
     return {sid: (s or 0.0) / n for sid, s, n in rows if n}
 
 
+def _term_marks_maps(db: Session, school: School):
+    """Per-term average mark-pct maps for the compare sheet:
+
+        cls_term[class_id][term] = class mean  |  stu_term[student_id][term]
+
+    Terms are 1/2/3, parsed from the exam label via _term_key; exams without
+    a parseable term are skipped (their marks still count in the all-year
+    average, exactly as before). Two dicts, both possibly sparse — a missing
+    term means "no marks recorded in that term" and renders as an empty CSV
+    cell rather than a fake 0."""
+    classes = db.query(Class).filter(Class.school_id == school.id).all()
+    ids = [c.id for c in classes]
+    cls_term: dict[int, dict[int, float]] = {}
+    stu_term: dict[int, dict[int, float]] = {}
+    if not ids:
+        return cls_term, stu_term
+
+    sid_cls = dict(db.query(Student.id, Student.class_id)
+                   .filter(Student.class_id.in_(ids)).all())
+    exam_term = {e.id: _term_key(e.term)
+                 for e in db.query(Exam).all() if _term_key(e.term)}
+
+    buckets_cls: dict[tuple[int, int], list[float]] = defaultdict(list)
+    buckets_stu: dict[tuple[int, int], list[float]] = defaultdict(list)
+    for sid, eid, p in (db.query(Mark.student_id, Mark.exam_id, _pct_expr())
+                        .select_from(Mark)
+                        .join(Exam, Mark.exam_id == Exam.id)
+                        .join(Student, Mark.student_id == Student.id)
+                        .filter(Student.class_id.in_(ids), Exam.max_score > 0)
+                        .all()):
+        tn = exam_term.get(eid)
+        if tn is None or p is None:
+            continue
+        buckets_stu[(sid, tn)].append(p)
+        cid = sid_cls.get(sid)
+        if cid is not None:
+            buckets_cls[(cid, tn)].append(p)
+
+    for (cid, tn), vals in buckets_cls.items():
+        cls_term.setdefault(cid, {})[tn] = round(sum(vals) / len(vals), 1)
+    for (sid, tn), vals in buckets_stu.items():
+        stu_term.setdefault(sid, {})[tn] = round(sum(vals) / len(vals), 1)
+    return cls_term, stu_term
+
+
 def _rolling_attendance(att_rows, window_days: int = 7):
     """[(date, status)] -> [{date, pct}] using a trailing `window_days`-day
     rolling average (present / marked within the window ending on each day).
@@ -2589,6 +2634,7 @@ def _teacher_aggregates(db: Session, school: School) -> dict:
     ranked_cids = sorted([c.id for c in class_rows], key=lambda cid: (-rollups[cid]["avg"], cid))
     class_rank = {cid: i for i, cid in enumerate(ranked_cids, start=1)}
     ct_of_map = {c.class_teacher_id: cid_name[c.id] for c in class_rows if c.class_teacher_id}
+    ct_id_map = {c.class_teacher_id: c.id for c in class_rows if c.class_teacher_id}
 
     per_t: dict[int, dict[int, set]] = defaultdict(lambda: defaultdict(set))
     names: dict[int, tuple] = {}
@@ -2597,6 +2643,12 @@ def _teacher_aggregates(db: Session, school: School) -> dict:
         per_t[tid][sid_].add(cid)
         names[tid] = (fname or email, email)
         subject_names[sid_] = sname
+
+    # v16 admin Staff List: notes prefills the DESCRIPTION & DETAILS textarea.
+    tids = list(per_t.keys())
+    notes_map = {u.id: u.notes for u in
+                 (db.query(User.id, User.notes).filter(User.id.in_(tids)).all()
+                  if tids else [])}
 
     def avg_of(key, pool):
         s, n = pool.get(key, [0.0, 0])
@@ -2634,6 +2686,16 @@ def _teacher_aggregates(db: Session, school: School) -> dict:
             "subject_id": sid_,
             "is_hod": (tid, sid_) in hod_pairs,
             "ct_of": ct_of_map.get(tid),
+            # v16 admin Staff List flags (additive — legacy consumers ignore
+            # unknown keys): is_ct/ct_class_id for the CLASS TEACHER OF
+            # select, classes_count/classes_assigned for CLASSES ASSIGNED,
+            # notes for DESCRIPTION & DETAILS.
+            "is_ct": tid in ct_id_map,
+            "ct_class_id": ct_id_map.get(tid),
+            "ct_class_label": ct_of_map.get(tid),
+            "classes_count": len(per_class),
+            "classes_assigned": [c["name"] for c in per_class],
+            "notes": notes_map.get(tid),
             "classes": len(per_class),
             "students": sum(c["students"] for c in per_class),
             "avg": mean_or_none([c["avg"] for c in per_class if c["avg"] is not None]),
@@ -2659,8 +2721,11 @@ def _teacher_aggregates(db: Session, school: School) -> dict:
 def principal_teachers(db: Session = Depends(get_db), user=Depends(_allowed)):
     """Ranked academic faculty for the v5 'Teachers Level' section.
 
-    Returns {"teachers":[{id,name,subject,is_hod,ct_of,classes,students,
-    avg,t1,t2,t3,trend,tasks_avg,rank,of}]} dense-ranked by avg desc."""
+    Returns {"teachers":[{id,name,email,subject,subject_id,is_hod,ct_of,
+    is_ct,ct_class_id,ct_class_label,classes_count,classes_assigned,notes,
+    classes,students,avg,t1,t2,t3,trend,tasks_avg,rank,of}]} dense-ranked
+    by avg desc. The v16 admin flags (is_ct/ct_class_id/classes_count/…)
+    are additive — legacy consumers read the original keys only."""
     school = _school_of(user, db)
     bundle = _teacher_aggregates(db, school)
     return {"teachers": [{k: v for k, v in t.items() if not k.startswith("_")}
@@ -2934,6 +2999,24 @@ def compare_entities(data: CompareRequest, db: Session = Depends(get_db),
         grade_map[c.grade].append(c.id)
 
     avg_map = _student_avg_map(db, school)
+    term_cls, term_stu = _term_marks_maps(db, school)
+
+    def _tcols_classes(cids):
+        """{"t1": avg|None, "t2": …, "t3": …} — per-term mean over classes."""
+        cols = {}
+        for tn in (1, 2, 3):
+            vals = [term_cls[c][tn] for c in cids if tn in term_cls.get(c, {})]
+            cols[f"t{tn}"] = round(sum(vals) / len(vals), 1) if vals else None
+        return cols
+
+    def _tcols_students(sids):
+        """{"t1": avg|None, "t2": …, "t3": …} — per-term mean over students."""
+        cols = {}
+        for tn in (1, 2, 3):
+            vals = [term_stu[s][tn] for s in sids if tn in term_stu.get(s, {})]
+            cols[f"t{tn}"] = round(sum(vals) / len(vals), 1) if vals else None
+        return cols
+
     tasks_by_class: dict[int, tuple[int, int]] = {}
     class_ids = [c.id for c in classes]
     if class_ids:
@@ -2979,6 +3062,7 @@ def compare_entities(data: CompareRequest, db: Session = Depends(get_db),
             mrk = round(sum(r["avg"] for r in rollups.values()) / len(rollups), 1) if rollups else 0.0
             out.append({"key": f"school|{school.id}", "name": school.name,
                         "marks": mrk, "attendance": att, "tasks": tsk})
+            out[-1].update(_tcols_classes(class_ids))
         elif etype == "grade":
             g = int(ent.id) if ent.id and str(ent.id).isdigit() else None
             cs = grade_map.get(g, []) if g is not None else []
@@ -2991,6 +3075,7 @@ def compare_entities(data: CompareRequest, db: Session = Depends(get_db),
                 mrk = round(sum(rollups[cid]["avg"] for cid in cs) / len(cs), 1)
                 out.append({"key": f"grade|{g}", "name": f"Grade {g}",
                             "marks": mrk, "attendance": att, "tasks": tsk})
+                out[-1].update(_tcols_classes(cs))
         elif etype == "class":
             cid_ = int(ent.id) if ent.id and str(ent.id).isdigit() else None
             c = cid_by_id.get(cid_) if cid_ is not None else None
@@ -3005,6 +3090,7 @@ def compare_entities(data: CompareRequest, db: Session = Depends(get_db),
                     "attendance": rollups[c.id]["attendance_pct"],
                     "tasks": round(done_ / total_ * 100, 1) if total_ else 0.0,
                 })
+                out[-1].update(_tcols_classes([c.id]))
         elif etype == "student":
             sid_ = int(ent.id) if ent.id and str(ent.id).isdigit() else None
             stu = (db.query(Student)
@@ -3022,6 +3108,7 @@ def compare_entities(data: CompareRequest, db: Session = Depends(get_db),
                     "attendance": stu_att.get(stu.id, 0.0),
                     "tasks": stu_tasks.get(stu.id, 0.0),
                 })
+                out[-1].update(_tcols_students([stu.id]))
         elif etype == "folder":
             ids = [int(x) for x in (ent.student_ids or []) if str(x).isdigit()]
             valid = (db.query(Student.id, Student.name)
@@ -3040,10 +3127,15 @@ def compare_entities(data: CompareRequest, db: Session = Depends(get_db),
                     "attendance": round(sum(stu_att.get(s, 0.0) for s, _ in valid) / len(valid), 1),
                     "tasks": round(sum(stu_tasks.get(s, 0.0) for s, _ in valid) / len(valid), 1),
                 })
+                out[-1].update(_tcols_students([s for s, _ in valid]))
         else:
             raise HTTPException(status_code=400,
                                 detail="entity.type must be school|grade|class|student|folder")
 
     for e in out:
         e["overall"] = round((e["marks"] + e["attendance"] + e["tasks"]) / 3, 1)
+        # every entity exposes the term axis (None → empty CSV cell), even
+        # when the branch above didn't compute it (unknown class/student)
+        for k, tn in (("t1", 1), ("t2", 2), ("t3", 3)):
+            e.setdefault(k, None)
     return {"entities": out}

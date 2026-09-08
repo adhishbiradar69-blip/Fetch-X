@@ -1,6 +1,6 @@
 # SchoolAI
 
-A professional, AI-powered school management platform with multi-role access, rich analytics, and an AI assistant for principals and chairpersons.
+A professional, AI-powered school management platform with multi-role access, rich analytics, and AI assistants for principals, vice-principals, and chairpersons.
 
 ## Stack
 - **Frontend**: React 19 + Vite + framer-motion + recharts + lucide-react
@@ -49,12 +49,14 @@ Or just log in at http://localhost:5173 and click "Seed Full Demo Data" on the A
 | root.schoolai@nexus-secure.internal | *(set once — secret)* | Super Admin (only one) | Principal dashboard + Class Teacher + Administration nav |
 | greenwood@admin.test | school123 | School Admin (Greenwood) | Principal dashboard + Class Teacher + Administration nav |
 | principal@greenwood.test | principal123 | Principal | Principal dashboard |
+| vp@greenwood.test | vp123 | Vice-Principal | Principal dashboard (VCP AI persona) |
 | teacher1.greenwood@schoolai.test | teacher123 | Class Teacher | Class Teacher console |
 | parent@greenwood.test | parent123 | Parent | Parent view |
 | chairperson@schoolai.test | chair123 | Chairperson | Multi-school command center |
 
 Other schools follow the same pattern: `principal@sunrise.test`, `sunrise@admin.test`,
-`principal@radiant.test`, `radiant@admin.test` (same passwords).
+`principal@radiant.test`, `radiant@admin.test`, plus a vice-principal per school —
+`vp@sunrise.test`, `vp@radiant.test` (same passwords).
 
 ### Role → pages map
 - **Super Admin** (`super_admin`, exactly one account) — the full v15 dashboard
@@ -65,7 +67,10 @@ Other schools follow the same pattern: `principal@sunrise.test`, `sunrise@admin.
   class they hold as CT (the seed's "preview post"), Administration links to
   the students / accounts / classes management pages.
 - **Principal** — the v15 dashboard (School → Subject → Class → Student →
-  Teacher levels) plus the AI panel.
+  Teacher levels) plus the AI panel and full AI page.
+- **Vice-Principal** — the same school-scoped dashboard, with the **VCP AI**
+  persona (operations desk: attendance, tasks, exams, staffing) in the AI
+  panel / `#ai` page.
 - **Class Teacher** — the dedicated console: My Class, Attendance, Task
   Completion, Academic Marks, Teaching Classes, My Report, Timetable.
 - **Chairperson / Parent** — read-only cross-school oversight / child view.
@@ -111,11 +116,40 @@ needed.
 | `ALLOWED_ORIGINS` | backend env — comma-separated frontend origins |
 
 ## AI configuration (optional)
-The principal & chairperson AI assistants use Groq by default. Set a Groq API key:
+The principal, vice-principal & chairperson AI assistants use Groq by default. Set a Groq API key:
 ```bash
 export GROQ_API_KEY="your-groq-key"
 ```
 If unset, falls back to the built-in z-ai LLM.
+
+### AI endpoints
+| Endpoint | Who | Persona | What it does |
+|---|---|---|---|
+| `POST /principal/ai/analyze` | principal, school_admin, super_admin | **Fetch-X AI** | Agentic analysis over the whole school — 33 tools incl. grade overview, class attendance & task completion tables, charts |
+| `POST /vice-principal/ai/analyze` | vice_principal, principal, school_admin, super_admin | **VCP AI** | Ops-first analysis — 29 tools: today's attendance, chronic absentees, pending homework, exam calendar, teacher coverage, section balance |
+| `POST /chairperson/ai/analyze` | chairperson | Chairperson AI | Cross-school oversight |
+
+Body: `{"question": "...", "history": [{"role": "user"|"assistant", "content": "..."}]}`.
+Rate-limited to 30 requests/minute per client.
+
+### AI pages
+- **Side panel** — the floating AI panel on the principal / vice-principal
+  dashboard (FAB button, bottom-right). Renders markdown, charts
+  (fenced `chart` blocks) and real HTML tables (fenced `table` blocks and
+  markdown pipe tables) in the chat.
+- **Full AI page (`#ai`)** — click the expand icon in the panel header (or
+  "AI Analyst" in the sidebar) to open a distraction-free, full-page chat at
+  `/principal/dashboard#ai`. The conversation carries over; the same thread
+  store backs both views and persists per persona in `localStorage`
+  (`fx-ai-thread-<persona>`).
+- **Prompt library** — the full page ships a categorized prompt library
+  (principal: School health / Students / Subjects & classes / Teachers &
+  staffing / Exams & homework / Decisions — VCP: Today / Homework & tasks /
+  Exams / Staffing & sections / Interventions). Click a question to ask it
+  immediately. Below 1000px the library collapses behind a
+  "WHAT CAN I ASK?" toggle.
+- **Personas** — the header card and suggestion chips swap automatically:
+  principals get "Fetch-X AI", vice-principals get "VCP AI · OPERATIONS".
 
 ## Deployment
 

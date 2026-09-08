@@ -93,6 +93,15 @@ try:
 except Exception as exc:  # pragma: no cover — startup should not crash on this
     print(f"[warn] ensure_unique_indexes failed: {exc}")
 
+# v16 admin data-management: add the nullable notes TEXT columns to the
+# students + users tables of databases created before this update
+# (create_all never ALTERs existing tables). Idempotent; helper lives in
+# the admin router, same try/except startup pattern as above.
+try:
+    admin.ensure_notes_columns()
+except Exception as exc:  # pragma: no cover — startup should not crash on this
+    print(f"[warn] ensure_notes_columns failed: {exc}")
+
 # Provision the hardcoded super_admin if missing.
 try:
     _db: Session = SessionLocal()

@@ -12,6 +12,9 @@ import { Donut, Distro, BarChart, LineChart, Trend, useReveal } from './charts';
 import { SectionHead, Chip, TeachPill } from './Sections';
 import { ClassTimetable } from './Timetable';
 import { ATT_TABS, initials, mean, pct } from './util';
+import ExportCsvButton from '../../../components/v16/ExportCsvButton';
+import EmptyState from '../../../components/v16/EmptyState';
+import { csvStamp } from '../../../lib/csv';
 
 function StatCell({ icon: Icon, k, v, of, sep }) {
   return (
@@ -123,6 +126,25 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
       .filter((s) => !q || s.name.toLowerCase().includes(q))
       .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
   }, [students, filter]);
+
+  /* EXPORT CSV — the class gradebook from the ALREADY-LOADED payload:
+     one row per student, one column per subject of the class. A class is
+     ≤30 students, so no pagination loop is needed here. */
+  const exportGradebookCsv = async () => {
+    const heads = ['RANK', 'STUDENT NAME', 'ATTENDANCE %', 'ALL-TERM AVG %',
+      ...subjects.map((x) => String(x.name).toUpperCase())];
+    const rows = list.map((s) => [
+      s.rank ?? '', s.name,
+      s.attendance_pct != null ? pct(s.attendance_pct) : '',
+      s.avg != null ? pct(s.avg) : '',
+      ...subjects.map((x) => s.subject_scores?.[x.name] ?? ''),
+    ]);
+    return {
+      filename: `fetchx-class-${info?.name || classId}-${csvStamp()}.csv`,
+      headers: heads,
+      rows,
+    };
+  };
 
   const name = info?.name || '…';
 
@@ -275,6 +297,11 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
                 onChange={(e) => setFilter(e.target.value)}
               />
               <span className="count">{filter ? `${list.length} MATCH${list.length === 1 ? '' : 'ES'}` : `${students.length} STUDENTS`}</span>
+              <ExportCsvButton
+                fetcher={exportGradebookCsv}
+                disabled={!students.length}
+                title="Download this class gradebook as a CSV file"
+              />
             </div>
             <div className="st-list-wrap">
               <div className="st-scroll" style={{ maxHeight: 420 }}>
@@ -290,7 +317,12 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
                     onBookmark={onBookmark}
                   />
                 ))}
-                {!list.length && <div className="noresult">No students match your search.</div>}
+                {!list.length && (
+                  <EmptyState
+                    title="No students match this search"
+                    hint="Search by student name — the list shows the whole class when cleared."
+                  />
+                )}
               </div>
             </div>
           </section>
@@ -302,7 +334,7 @@ export default function ClassDetail({ classId, classesAll, onBack, onOpenReport,
               sub={`Weekly schedule for Class ${name} — conflict-free across every teacher.`}
               tag="MON–SAT · 9 PERIODS"
             />
-            <ClassTimetable classId={classId} />
+            <ClassTimetable classId={classId} label={`Class ${name} timetable`} />
           </section>
         </>
       )}

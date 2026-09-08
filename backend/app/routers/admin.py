@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 from datetime import date, timedelta, datetime, timezone
 from typing import Optional
 import random
 from passlib.context import CryptContext
 
-from app.database import get_db
+from app.database import get_db, engine
 from app.models.school import School
 from app.models.class_ import Class
 from app.models.student import Student
@@ -22,7 +22,7 @@ from app.models.teacher_assignment import TeacherAssignment
 from app.schemas.student import SchoolCreate, ClassCreate, StudentCreate
 from app.schemas.admin import (
     SubjectCreate, GradeSubjectAdd, ExamCreate, AccountCreate, AssignBody,
-    GradeSubjectRange, ExamRange, ExtraTeacherCreate,
+    GradeSubjectRange, ExamRange, ExtraTeacherCreate, StudentUpdate, StaffUpdate,
 )
 from app.dependencies import (
     get_current_user, require_role, require_super_admin, require_school_admin,
@@ -30,6 +30,9 @@ from app.dependencies import (
 )
 from app.models.extra_teacher import ExtraTeacher
 from app.routers.auth import get_password_hash, _validate_email, _validate_password_strength
+# v16: /admin/stats composes the principal endpoint's school-scope helpers so
+# both surfaces always report identical numbers for the same school.
+from app.routers.principal import _school_of, _school_rank_info, principal_stats
 from app import config
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -53,6 +56,28 @@ def _audit(actor_email: str, action: str, **details) -> None:
     safe = {k: ("***" if k in {"password", "hashed_password"} else v)
             for k, v in details.items() if v is not None}
     print(f'[AUDIT] {ts} actor={actor_email!r} action={action!r} {safe}', flush=True)
+
+
+# ──────────────────────────────────────────────────────────────
+# v16 SCHEMA MIGRATION — nullable notes TEXT on students + users
+# ──────────────────────────────────────────────────────────────
+# Base.metadata.create_all only creates MISSING tables; it never ALTERs ones
+# that already exist. Databases seeded before the v16 admin data-management
+# update (e.g. backend/school.db) therefore lack the new columns, and every
+# ORM read/write of Student.notes / User.notes would crash with
+# "no such column: notes". This helper runs at startup (wired from
+# app/main.py next to ensure_unique_indexes) and is IDEMPOTENT: the PRAGMA
+# check makes repeat boots a no-op.
+def ensure_notes_columns() -> None:
+    for table in ("students", "users"):
+        try:
+            with engine.begin() as conn:
+                cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+                if "notes" not in cols:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN notes TEXT"))
+                    print(f"[migrate] added notes column to {table}")
+        except Exception as exc:
+            print(f"[warn] notes migration skipped for {table}: {exc}")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -131,12 +156,23 @@ def create_class(data: ClassCreate, db: Session = Depends(get_db), user=Depends(
 
 @router.get("/classes")
 def list_classes(db: Session = Depends(get_db), user=Depends(require_school_admin)):
-    q = db.query(Class).order_by(Class.school_id, Class.grade, Class.section)
-    if user.role == "school_admin":
-        if user.school_id is None:
+    # v16 AD tier is school-scoped ("Data management for the {SCHOOL} campus"):
+    # school_admin sees their school; super_admin previews the FIRST school —
+    # the same resolution /admin/stats uses, so the roster counts and the
+    # stats strip can never disagree. (Multi-school listing stays available
+    # via /admin/classes/{school_id}.)
+    if user.role == "super_admin":
+        school = _school_of(user, db)
+        if school is None:
             return []
-        q = q.filter(Class.school_id == user.school_id)
-    rows = q.all()
+        q2 = db.query(Class).filter(Class.school_id == school.id)
+    else:
+        q2 = db.query(Class)
+        if user.role == "school_admin":
+            if user.school_id is None:
+                return []
+            q2 = q2.filter(Class.school_id == user.school_id)
+    rows = q2.order_by(Class.school_id, Class.grade, Class.section).all()
     out = []
     for c in rows:
         teacher = db.query(User).filter(User.id == c.class_teacher_id).first()
@@ -197,7 +233,152 @@ def list_students_in_class(class_id: int, db: Session = Depends(get_db), user=De
     rows = (db.query(Student).filter(Student.class_id == class_id)
               .order_by(func.length(Student.roll_no), Student.roll_no).all())
     # parent_user_id is deliberately NOT exposed here (internal linkage).
-    return [{"id": s.id, "name": s.name, "roll_no": s.roll_no} for s in rows]
+    # notes added for the v16 roster edit modal (additive; existing consumers
+    # only read id/name/roll_no).
+    return [{"id": s.id, "name": s.name, "roll_no": s.roll_no, "notes": s.notes}
+            for s in rows]
+
+
+# ──────────────────────────────────────────────────────────────
+# v16 DATA MANAGEMENT — students (edit / delete / school-wide list)
+# ──────────────────────────────────────────────────────────────
+@router.get("/students")
+def list_students_v16(search: Optional[str] = None, grade: Optional[int] = None,
+                      class_id: Optional[int] = None, page: int = 1, page_size: int = 50,
+                      db: Session = Depends(get_db), user=Depends(require_school_admin)):
+    """School-wide student roster for the v16 '04 All Students' section.
+
+    ?search=&grade=&class_id=&page=&page_size= (page 1-based, page_size
+    capped at 200) → {"students":[{id,name,roll_no,class_id,grade,section,
+    class_label,class_name,notes}],"total","page","page_size"}.
+    school_admin is scoped to their school; super_admin previews the first.
+    (The analytics-heavy /principal/students stays the ranking explorer;
+    this endpoint is the light, notes-aware data-management source.)
+    """
+    school = _school_of(user, db)
+    q = (db.query(Student, Class)
+           .join(Class, Student.class_id == Class.id)
+           .filter(Class.school_id == school.id))
+    if class_id:
+        q = q.filter(Student.class_id == class_id)
+    if grade:
+        q = q.filter(Class.grade == grade)
+    if search and search.strip():
+        q = q.filter(func.lower(Student.name).like(f"%{search.strip().lower()}%"))
+
+    total = q.count()
+    page = max(int(page or 1), 1)
+    page_size = min(max(int(page_size or 50), 1), 200)
+    rows = (q.order_by(Class.grade, Class.section,
+                       func.length(Student.roll_no), Student.roll_no)
+              .offset((page - 1) * page_size).limit(page_size).all())
+    return {
+        "students": [
+            {"id": s.id, "name": s.name, "roll_no": s.roll_no,
+             "class_id": c.id, "grade": c.grade, "section": c.section,
+             "class_label": f"Grade {c.grade}-{c.section}",
+             "class_name": f"{c.grade}-{c.section}", "notes": s.notes}
+            for s, c in rows
+        ],
+        "total": total, "page": page, "page_size": page_size,
+    }
+
+
+@router.put("/students/{student_id}")
+def update_student(student_id: int, body: StudentUpdate, db: Session = Depends(get_db),
+                   user=Depends(require_school_admin)):
+    """v16 'Edit Student' modal: rename + move to another class + notes.
+
+    The target class is accepted either as class_id (wins when present) or
+    as the (grade, section) pair from the designer's selects — resolved
+    within the STUDENT'S OWN school so a school_admin can never move a
+    student across tenants. notes is written when the key is present
+    (explicit null clears it), left untouched when omitted.
+    """
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    current_cls = db.query(Class).filter(Class.id == student.class_id).first()
+    if not current_cls:
+        raise HTTPException(status_code=404, detail="Student's current class not found")
+    assert_school_access(user, current_cls.school_id)
+
+    if body.class_id is not None:
+        target = db.query(Class).filter(Class.id == body.class_id).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Class not found")
+        if target.school_id != current_cls.school_id:
+            raise HTTPException(status_code=400, detail="Target class belongs to a different school.")
+    elif body.grade is not None and body.section and body.section.strip():
+        section = body.section.strip()
+        target = (db.query(Class)
+                    .filter(Class.school_id == current_cls.school_id,
+                            Class.grade == body.grade, Class.section == section)
+                    .first())
+        if not target:  # tolerate case differences ("sapphire" → "Sapphire")
+            target = (db.query(Class)
+                        .filter(Class.school_id == current_cls.school_id,
+                                Class.grade == body.grade,
+                                func.lower(Class.section) == section.lower())
+                        .first())
+        if not target:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Class {body.grade}-{section} not found in this school.")
+    else:
+        raise HTTPException(status_code=400,
+                            detail="Provide class_id, or both grade and section.")
+
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Student name is required.")
+        student.name = name[:120]
+    student.class_id = target.id
+    if "notes" in body.model_fields_set:
+        student.notes = body.notes
+    db.commit()
+    _audit(user.email, "student.update", student_id=student.id,
+           name=student.name, class_id=target.id)
+    return {"ok": True, "student": {
+        "id": student.id, "name": student.name, "roll_no": student.roll_no,
+        "class_id": target.id, "grade": target.grade, "section": target.section,
+        "class_label": f"Grade {target.grade}-{target.section}",
+        "notes": student.notes,
+    }}
+
+
+@router.delete("/students/{student_id}")
+def delete_student(student_id: int, db: Session = Depends(get_db),
+                   user=Depends(require_school_admin)):
+    """v16 'All Students' ✕ action: HARD delete ONE student.
+
+    SQLite has no ON DELETE CASCADE on these links, so the child rows
+    (task_completions, attendance, marks) are deleted explicitly first —
+    strictly scoped to THIS student_id, never a bulk wipe. The designer
+    delete has no confirmation step: the frontend shows an undo toast
+    client-side, so the endpoint answers immediately with the deleted id.
+    """
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    cls = db.query(Class).filter(Class.id == student.class_id).first()
+    if not cls:
+        raise HTTPException(status_code=404, detail="Student's class not found")
+    assert_school_access(user, cls.school_id)
+
+    deleted_name = student.name
+    db.query(TaskCompletion).filter(TaskCompletion.student_id == student_id)\
+        .delete(synchronize_session=False)
+    db.query(Attendance).filter(Attendance.student_id == student_id)\
+        .delete(synchronize_session=False)
+    db.query(Mark).filter(Mark.student_id == student_id)\
+        .delete(synchronize_session=False)
+    db.delete(student)
+    db.commit()
+    _audit(user.email, "student.delete", student_id=student_id,
+           name=deleted_name, class_id=cls.id)
+    return {"ok": True, "deleted_id": student_id}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -510,6 +691,169 @@ def assign_chairperson(body: AssignBody, db: Session = Depends(get_db),
         target_user_id=u.id, target_email=u.email, school_ids=ids,
     )
     return {"status": "assigned", "user_id": u.id, "school_ids": ids}
+
+
+# ──────────────────────────────────────────────────────────────
+# v16 DATA MANAGEMENT — staff (03 Staff List edit modal) + stats
+# ──────────────────────────────────────────────────────────────
+def _staff_school_id(teacher: User, db: Session) -> Optional[int]:
+    """The school a staff member belongs to: their account school, falling
+    back to the school stamped on their TeacherAssignment rows (the seed
+    always sets one of the two)."""
+    if teacher.school_id:
+        return teacher.school_id
+    row = (db.query(TeacherAssignment.school_id)
+             .filter(TeacherAssignment.teacher_user_id == teacher.id)
+             .first())
+    return row[0] if row else None
+
+
+def _staff_payload(teacher: User, school_id: int, db: Session) -> dict:
+    """Post-save staff state for the v16 Staff List (name, subject chip,
+    HOD flag, CT post, assigned classes, notes)."""
+    rows = (db.query(TeacherAssignment)
+              .filter(TeacherAssignment.school_id == school_id,
+                      TeacherAssignment.teacher_user_id == teacher.id)
+              .all())
+    load = [r for r in rows if r.class_id]
+    hod_rows = [r for r in rows if r.class_id is None and r.is_hod]
+    # The teacher's subject: their department (HOD row) when they hold one,
+    # otherwise the subject they teach in the most classes.
+    subject_id = None
+    if hod_rows:
+        subject_id = hod_rows[0].subject_id
+    elif load:
+        counts: dict[int, int] = {}
+        for r in load:
+            counts[r.subject_id] = counts.get(r.subject_id, 0) + 1
+        subject_id = max(counts.items(), key=lambda kv: kv[1])[0]
+    subject = db.query(Subject).filter(Subject.id == subject_id).first() if subject_id else None
+    class_ids = sorted({r.class_id for r in load})
+    class_rows = db.query(Class).filter(Class.id.in_(class_ids)).all() if class_ids else []
+    class_rows.sort(key=lambda c: (c.grade, c.section))
+    ct_cls = db.query(Class).filter(Class.class_teacher_id == teacher.id).first()
+    return {
+        "id": teacher.id,
+        "email": teacher.email,
+        "role": teacher.role,
+        "full_name": teacher.full_name or teacher.email,
+        "notes": teacher.notes,
+        "subject_id": subject_id,
+        "subject": subject.name if subject else None,
+        "is_hod": bool(hod_rows),
+        "is_ct": ct_cls is not None,
+        "ct_class_id": ct_cls.id if ct_cls else None,
+        "ct_class_label": f"{ct_cls.grade}-{ct_cls.section}" if ct_cls else None,
+        "classes_count": len(class_ids),
+        "classes_assigned": [f"{c.grade}-{c.section}" for c in class_rows],
+    }
+
+
+@router.put("/staff/{teacher_user_id}")
+def update_staff(teacher_user_id: int, body: StaffUpdate, db: Session = Depends(get_db),
+                 user=Depends(require_school_admin)):
+    """v16 'Edit Staff' modal: STAFF NAME / SUBJECT / CLASS TEACHER OF / notes.
+
+    Mirrors the existing assign endpoints' semantics:
+    - SUBJECT transfer rewrites the teacher's TeacherAssignment rows in their
+      school (the class_id=NULL HOD row + every teaching-load row) to the new
+      subject — is_hod / is_class_teacher flags ride along with the teacher.
+    - CLASS TEACHER OF keeps exactly one CT per class: claiming a post frees
+      the teacher from any previous one and REPLACES the target class's
+      current CT (the displaced teacher loses the post but keeps teaching,
+      exactly like POST /admin/assign/class-teacher and the seeder).
+      An explicit "ct_class_id": null clears the post ("— Not a class
+      teacher —").
+    Omitted keys leave those fields untouched (model_fields_set).
+    """
+    teacher = db.query(User).filter(User.id == teacher_user_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    if teacher.role not in ("class_teacher", "school_admin"):
+        raise HTTPException(status_code=400,
+                            detail="Only teacher accounts can be edited as staff.")
+    school_id = _staff_school_id(teacher, db)
+    if not school_id:
+        raise HTTPException(status_code=400,
+                            detail="Staff member is not linked to any school.")
+    assert_school_access(user, school_id)
+
+    sent = body.model_fields_set
+
+    if body.full_name is not None:
+        name = body.full_name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Staff name is required.")
+        teacher.full_name = name[:120]
+
+    if body.subject_id is not None:
+        if not db.query(Subject).filter(Subject.id == body.subject_id).first():
+            raise HTTPException(status_code=404, detail="Subject not found")
+        rows = (db.query(TeacherAssignment)
+                  .filter(TeacherAssignment.school_id == school_id,
+                          TeacherAssignment.teacher_user_id == teacher.id)
+                  .all())
+        for r in rows:
+            r.subject_id = body.subject_id
+
+    if "ct_class_id" in sent:
+        if body.ct_class_id is None:
+            # "— Not a class teacher —": drop any post they currently hold.
+            db.query(Class).filter(Class.class_teacher_id == teacher.id).update(
+                {Class.class_teacher_id: None}, synchronize_session=False)
+            teacher.assigned_class_id = None
+        else:
+            cls = db.query(Class).filter(Class.id == body.ct_class_id).first()
+            if not cls:
+                raise HTTPException(status_code=404, detail="Class not found")
+            if cls.school_id != school_id:
+                raise HTTPException(status_code=400,
+                                    detail="Class belongs to a different school.")
+            # Free the teacher from any OTHER post first (at most one each).
+            db.query(Class).filter(Class.class_teacher_id == teacher.id,
+                                   Class.id != cls.id).update(
+                {Class.class_teacher_id: None}, synchronize_session=False)
+            # Displace the class's previous CT (they keep their teaching load).
+            prev_ct_id = cls.class_teacher_id
+            if prev_ct_id and prev_ct_id != teacher.id:
+                prev = db.query(User).filter(User.id == prev_ct_id).first()
+                if prev and prev.assigned_class_id == cls.id:
+                    prev.assigned_class_id = None
+            cls.class_teacher_id = teacher.id
+            teacher.assigned_class_id = cls.id
+            if teacher.school_id is None:
+                teacher.school_id = cls.school_id
+
+    if "notes" in sent:
+        teacher.notes = body.notes
+
+    db.commit()
+    _audit(user.email, "staff.update", teacher_user_id=teacher.id,
+           full_name=teacher.full_name,
+           subject_id=body.subject_id if "subject_id" in sent else None,
+           ct_class_id=body.ct_class_id if "ct_class_id" in sent else None)
+    return {"ok": True, "teacher": _staff_payload(teacher, school_id, db)}
+
+
+@router.get("/stats")
+def admin_stats(db: Session = Depends(get_db), user=Depends(require_school_admin)):
+    """Headline stats for the v16 admin dashboard card strip.
+
+    school_admin is ALREADY allowed on GET /principal/stats (its role gate
+    includes school_admin) — that endpoint is unchanged and stays the
+    canonical source; this wrapper calls it so the numbers can never drift,
+    then adds the SCHOOL RANKING #/n fields the v16 card needs so the page
+    renders the whole strip from ONE call.
+    """
+    school = _school_of(user, db)
+    stats = principal_stats(db=db, user=user)
+    rank, total_schools = _school_rank_info(db, school)
+    return {
+        **stats,
+        "school_rank": int(rank) if rank is not None else 0,
+        "school_rank_of": int(total_schools),
+        "school": {"id": school.id, "name": school.name},
+    }
 
 
 # ──────────────────────────────────────────────────────────────

@@ -3,42 +3,34 @@ import { AuthProvider, useAuth, homePathFor } from './auth/AuthContext';
 import Layout from './components/Layout';
 import AdminShell from './components/AdminShell';
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import PublicLayout from './components/PublicLayout';
+import Public16Shell from './pages/public/Public16Shell';
 import Login from './pages/Login';
 import Landing from './pages/public/Landing';
 import About from './pages/public/About';
 import Terms from './pages/public/Terms';
 import Privacy from './pages/public/Privacy';
 import CTConsole from './pages/Teacher/CTConsole';
-import AdminDashboard from './pages/Admin/Dashboard';
-import AdminStudents from './pages/Admin/Students';
 import AccountCreation from './pages/Admin/Accounts';
 import ExtraTeachers from './pages/Admin/ExtraTeachers';
+import AdminConsole from './pages/Admin/AdminConsole';
 import PrincipalDashboard from './pages/Principal/Dashboard';
-import ChairpersonMultiSchool from './pages/Chairperson/MultiSchool';
-import ChairpersonRankings from './pages/Chairperson/Rankings';
-import ChairpersonCompare from './pages/Chairperson/Compare';
+import ChairpersonDashboard from './pages/Chairperson/ChairpersonDashboard';
+import DevConsole from './pages/Developer/DevConsole';
 import ParentChildView from './pages/Parent/ChildView';
 
 const A = ['super_admin', 'school_admin', 'admin']; // admin roles
 
-/* Landing scroll-spy: in-page section id -> nav path highlighted while it's
-   in view (prototype's active-nav-on-scroll). Module-level so the prop
-   identity is stable across renders. */
-const LANDING_SPY = [
-  { id: 'home', to: '/' },
-  { id: 'about', to: '/about' },
-  { id: 'features', to: '/' },
-  { id: 'privacy', to: '/privacy' },
-];
-
 function ProtectedRoute({ children, roles, bare = false }) {
   const { user, token } = useAuth();
   const location = useLocation();
-  if (!token) return <Navigate to="/login" replace state={{ from: location }} />;
+  // Signed out (or session expired) → the PUBLIC LANDING, matching the
+  // designer flow (sign-out → index). /login is still reachable by URL,
+  // but stranding users there after a sign-out lost them the landing page.
+  // (location.state.from was never consumed — dropped.)
+  if (!token) return <Navigate to="/" replace state={{ from: location }} />;
   // Token present but user object missing/corrupted → re-auth cleanly
   // instead of rendering pages with the wrong role chrome.
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/" replace />;
   if (roles && !roles.includes(user.role)) {
     return <Navigate to={homePathFor(user.role)} replace />;
   }
@@ -49,21 +41,20 @@ function ProtectedRoute({ children, roles, bare = false }) {
 }
 
 /* Landing route: shows Landing if NOT logged in, otherwise redirects to the
-   user's role-based home. `flush` drops the shell's nav clearance — the hero
-   reserves its own (prototype geometry). */
+   user's role-based home. v16: the designer landing (upload/index(2).html) is
+   a STANDALONE page — it owns its own fixed pill nav + footer and its own
+   in-page scroll-spy — so it renders WITHOUT the PublicLayout shell, whose
+   chrome would duplicate the designer nav/footer. */
 function LandingRoute() {
   const { user, token } = useAuth();
   if (token && user) return <Navigate to={homePathFor(user.role)} replace />;
-  return (
-    <PublicLayout flush spy={LANDING_SPY}>
-      <Landing />
-    </PublicLayout>
-  );
+  return <Landing />;
 }
 
-/* Generic public-page wrapper — never blocks on auth. */
+/* Generic public-page wrapper — v16 shell (same design language as the
+   landing), never blocks on auth. */
 function PublicPage({ children }) {
-  return <PublicLayout>{children}</PublicLayout>;
+  return <Public16Shell>{children}</Public16Shell>;
 }
 
 /* Login route: if already authenticated, send to role home. */
@@ -112,14 +103,12 @@ function AnimatedRoutes() {
       <Route path="/class-teacher/report" element={<RoleHomeRedirect />} />
 
       {/* Protected app pages — v15 chrome + role required */}
+      {/* v16: the admin rebuild owns its full chrome (sidebar included) */}
       <Route path="/admin/dashboard" element={
-        <ProtectedRoute bare roles={A}>
-          <AdminShell adminKey="adminDashboard"><AdminDashboard /></AdminShell>
-        </ProtectedRoute>} />
-      <Route path="/admin/students" element={
-        <ProtectedRoute bare roles={A}>
-          <AdminShell adminKey="adminStudents"><AdminStudents /></AdminShell>
-        </ProtectedRoute>} />
+        <ProtectedRoute bare roles={A}><AdminConsole /></ProtectedRoute>} />
+      {/* legacy admin URLs — the v16 console absorbs students; accounts and
+          extra-teachers stay reachable for power users */}
+      <Route path="/admin/students" element={<RoleHomeRedirect />} />
       <Route path="/admin/accounts" element={
         <ProtectedRoute bare roles={A}>
           <AdminShell adminKey="adminAccounts"><AccountCreation /></AdminShell>
@@ -138,11 +127,13 @@ function AnimatedRoutes() {
       <Route path="/principal/attendance" element={<Navigate to="/principal/dashboard" replace />} />
       <Route path="/principal/compare" element={<Navigate to="/principal/dashboard" replace />} />
       <Route path="/chairperson/dashboard" element={
-        <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonMultiSchool /></ProtectedRoute>} />
-      <Route path="/chairperson/rankings" element={
-        <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonRankings /></ProtectedRoute>} />
-      <Route path="/chairperson/compare" element={
-        <ProtectedRoute roles={['chairperson', ...A]}><ChairpersonCompare /></ProtectedRoute>} />
+        <ProtectedRoute bare roles={['chairperson', ...A]}><ChairpersonDashboard /></ProtectedRoute>} />
+      {/* v16: the old recharts pages redirect into the rebuilt CP tier */}
+      <Route path="/chairperson/rankings" element={<RoleHomeRedirect />} />
+      <Route path="/chairperson/compare" element={<RoleHomeRedirect />} />
+      {/* v16 developer build: all four tiers in one shell */}
+      <Route path="/group" element={
+        <ProtectedRoute bare roles={['super_admin']}><DevConsole /></ProtectedRoute>} />
       <Route path="/parent/view" element={
         <ProtectedRoute roles={['parent', ...A]}><ParentChildView /></ProtectedRoute>} />
 

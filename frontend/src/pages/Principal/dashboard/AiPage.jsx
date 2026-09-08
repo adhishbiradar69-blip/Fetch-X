@@ -201,7 +201,7 @@ export default function AiPage({ persona = 'principal', onBack }) {
           </button>
           {msgs.length || loading ? (
             <div className="ai-msgs aip-msgs">
-              <AiMessageList msgs={msgs} loading={loading} persona={persona} endRef={endRef} />
+              <AiMessageList msgs={msgs} loading={loading} persona={persona} endRef={endRef} onAsk={ask} />
             </div>
           ) : (
             <div className="ask-center aip-center">

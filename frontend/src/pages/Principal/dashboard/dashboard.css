@@ -61,12 +61,11 @@ body.dark .ai-err { background: rgba(220,38,38,.12); border-color: rgba(220,38,3
 /* ---- AI resize grip stretches with the panel -------------------- */
 .ai-handle { align-self: stretch; }
 
-/* ---- report modal print helper ---------------------------------- */
-@media print {
-  body * { visibility: hidden; }
-  .report, .report * { visibility: visible; }
-  .report { position: absolute; left: 0; top: 0; width: 100%; box-shadow: none; }
-}
+/* ---- report modal print helper ----------------------------------
+   SUPERSEDED by src/styles/print.css (Task 10): a full print sheet —
+   light-token forcing, letterhead, page-break hygiene, compare-modal
+   support — scoped to the OPEN modal. The bare visibility rule that
+   used to live here would print a dark, clipped card from dark mode. */
 
 /* ---- responsive: AI drawer (mirrors prototype ≤1150px) ---------- */
 @media (max-width: 1150px) {
@@ -171,6 +170,37 @@ body.dark .ai-err { background: rgba(220,38,38,.12); border-color: rgba(220,38,3
 .ai-expand-chip:hover { border-color: #8a7cf6; background: var(--chip); }
 body.dark .ai-expand-chip { color: #c9c2ff; border-color: rgba(138,124,246,.4); }
 body.dark .ai-expand-chip:hover { border-color: #8a7cf6; }
+
+/* ---- AI: per-message COPY pill -------------------------------------
+   Sits at the right edge of the badges row (quiet until hover); flips
+   to a green COPIED state for ~1.6s after a successful copy. */
+.ai-copy {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
+  font: inherit; font-size: 7px; font-weight: 800; letter-spacing: .1em;
+  color: var(--muted); background: transparent; border: 1px solid transparent;
+  border-radius: 999px; padding: 2px 7px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.ai-copy svg { width: 9px; height: 9px; }
+.ai-copy:hover { color: #4f42dd; border-color: #c9c2f5; background: var(--surf); }
+.ai-copy:focus-visible { outline: 2px solid #8a7cf6; outline-offset: 1px; }
+.ai-copy.ok { color: #0e9f6e; border-color: rgba(14, 159, 110, .35); }
+body.dark .ai-copy:hover { color: #c9c2ff; border-color: rgba(138, 124, 246, .4); }
+body.dark .ai-copy.ok { color: #34d399; }
+
+/* ---- AI: follow-up chips ("KEEP DIGGING") after the last answer -----
+   The chips reuse the .sugg kit from the empty state; a dashed divider
+   separates them from the answer so they read as the NEXT move, not as
+   part of it. Staggered entrance, flattened under reduced motion. */
+.ai-follow { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line); display: grid; gap: 6px; }
+.ai-follow-label { font-size: 7.5px; font-weight: 800; letter-spacing: .12em; color: var(--muted); }
+.ai-follow-chips { display: flex; flex-direction: column; gap: 5px; }
+.ai-follow-chips .sugg { text-align: left; }
+.ai-follow-chips .sugg svg { width: 11px; height: 11px; }
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes aiFollowIn { from { opacity: 0; transform: translateY(5px); } }
+  .ai-follow-chips .sugg { animation: aiFollowIn .3s var(--ease, ease) both; }
+}
 
 /* ---- AI: dedicated full page (#ai view) --------------------------- */
 .aip-root { display: flex; flex-direction: column; height: 100%; min-height: 0; }

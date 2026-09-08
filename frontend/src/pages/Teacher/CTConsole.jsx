@@ -1,6 +1,12 @@
-/* CTConsole — designer v15 "CLASS TEACHER UI" (dashboard(2).html ctmode).
-   Route /teacher/console. Same dashboard chrome as the principal view
-   (sidebar with CT nav, pagehead, AI panel) with seven pages:
+/* CTConsole — designer v16 "class-teacher.html" port (Sep 7 role build).
+   Route /teacher/console. Standalone console = DashSidebar(ct standalone,
+   logo + "CLASS TEACHER · {CLASS}" group + "CLASS TEACHER · SIGN OUT") +
+   v16 pagehead (.ph-tt.tier-ct) + ONE .tier.tier-ct whose .tier-band sits
+   fused above the page sections. No AI rail — the v16 CT build has none
+   (dual-mode embedding is covered by .pd-root.ct-root CSS, which hides the
+   principal shell's .rightbar/.ai-handle/.ai-fab).
+
+   Pages (all wired to the real backend — keep the endpoints):
 
      ctHome   My Class            → /ct/class-dashboard (full class view)
      ctAtt    Attendance          → /attendance/*  (P/A/L register per date)
@@ -8,7 +14,7 @@
      ctMarks  Academic Marks      → /academics/*   (per-term marks grid)
      ctTeach  Teaching Classes    → /ct/teaching-classes
      ctMy     My Report           → /ct/teacher-report (via report modal)
-     ctTT     Timetable           → /timetable/teacher/{me} (NEW backend) */
+     ctTT     Timetable           → /timetable/teacher/{me} */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
@@ -21,19 +27,51 @@ import { useAuth } from '../../auth/AuthContext';
 import { Toast } from '../../components/ui';
 import DashSidebar from '../Principal/dashboard/DashSidebar';
 import ClassDetail from '../Principal/dashboard/ClassDetail';
-import AiPanel from '../Principal/dashboard/AiPanel';
 import { LevelThemeStyle } from '../Principal/dashboard/LevelThemes';
 import { PersonalTimetable } from '../Principal/dashboard/Timetable';
 import { BarChart, Distro, useReveal } from '../Principal/dashboard/charts';
 import { SectionHead, Chip } from '../Principal/dashboard/Sections';
 import ReportCardModal from '../Principal/dashboard/ReportCardModal';
 import TeacherReportModal from '../Principal/dashboard/TeacherReportModal';
+import { PageHead, TierBand, Tier } from '../../components/v16/Shell';
+import { TIER_ICONS } from '../../components/v16/icons';
+import ExportCsvButton from '../../components/v16/ExportCsvButton';
 import api from '../../api/client';
 import { bandOf, initials, mean, pct } from '../Principal/dashboard/util';
 import '../Principal/dashboard/dashboard.css';
 import '../Principal/dashboard/v15.css';
+import '../Principal/dashboard/v16.css';
 
 const TODAY = () => new Date().toISOString().slice(0, 10);
+
+/* designer attendance-card icons (class-teacher.html renderAtt) */
+const ATT_ICONS = {
+  total: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V8l8-5 8 5v13" /><path d="M2 21h20M9.5 21v-4h5v4" /></svg>
+  ),
+  present: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 12.5l5 5 10-11" /></svg>
+  ),
+  absent: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+  ),
+  late: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+  ),
+};
+
+/* subject SHORT names for the marks-grid header cells — mirrors the
+   backend timetable router's `_short()` so the grid reads MATH / SCI /
+   ENG … like the designer's (40px + name + N×64px + 60px grid). */
+const SUBJ_SHORT = {
+  MATHEMATICS: 'MATH', MATHS: 'MATH', MATH: 'MATH',
+  SCIENCE: 'SCI', ENGLISH: 'ENG', HINDI: 'HINDI',
+  SOCIAL: 'SOCIAL', 'SOCIAL STUDIES': 'SOCIAL',
+  COMPUTER: 'COMP', 'COMPUTER SCIENCE': 'COMP',
+  'PHYSICAL EDUCATION': 'PE', PHYSICAL: 'PE',
+};
+const subjShort = (name) => SUBJ_SHORT[String(name || '').trim().toUpperCase()]
+  || String(name || '').slice(0, 6).toUpperCase();
 
 /* ─────────────────────────────── 02 ATTENDANCE ─────────────────────────── */
 function CTAttendance({ cls }) {
@@ -66,44 +104,84 @@ function CTAttendance({ cls }) {
   };
   const setAll = (st) => save((rows || []).map((s) => ({ student_id: s.id, status: st })));
 
+  /* EXPORT CSV — the day's register exactly as marked (P/A/L/unmarked). */
+  const exportRegisterCsv = async () => ({
+    filename: `fetchx-attendance-${cls.name}-${date}.csv`,
+    headers: ['#', 'STUDENT NAME', 'STATUS'],
+    rows: (rows || []).map((s, i) => {
+      const st = s.status && ['P', 'A', 'L'].includes(s.status) ? s.status : '';
+      return [i + 1, s.name, st === 'P' ? 'PRESENT' : st === 'A' ? 'ABSENT' : st === 'L' ? 'LATE' : 'NOT MARKED'];
+    }),
+  });
+
   const P = (rows || []).filter((s) => s.status === 'P').length;
   const A = (rows || []).filter((s) => s.status === 'A').length;
   const L = (rows || []).filter((s) => s.status === 'L').length;
   const T = (rows || []).length;
+  const gridCols = { gridTemplateColumns: '48px minmax(0,1fr) 150px' };
 
   return (
     <section className="lvl lvl-2 compact first">
       <SectionHead
         lvl={2}
         title="Attendance"
-        sub="Mark the register for any school day — tap a pill to cycle Present → Absent → Late."
-        tag={`CLASS ${cls.name}`}
+        sub="Mark daily attendance for your class."
+        tag="DAILY REGISTER"
       />
+      <div className="ct-cards">
+        <div className="ct-card">
+          <span className="cic" style={{ background: 'var(--lav)', color: '#4f42dd' }}>{ATT_ICONS.total}</span>
+          <div className="cnum">{T || '—'}</div>
+          <div className="ck">TOTAL STUDENTS</div>
+        </div>
+        <div className="ct-card">
+          <span className="cic" style={{ background: '#e3f5ed', color: '#0e9f6e' }}>{ATT_ICONS.present}</span>
+          <div className="cnum" style={{ color: '#0e9f6e' }}>{rows ? P : '—'}</div>
+          <div className="ck">PRESENT TODAY</div>
+          <div className="cbar"><i style={{ background: '#0e9f6e', width: T ? `${(P / T) * 100}%` : 0 }} /></div>
+        </div>
+        <div className="ct-card">
+          <span className="cic" style={{ background: '#fce8e8', color: '#dc2626' }}>{ATT_ICONS.absent}</span>
+          <div className="cnum" style={{ color: '#dc2626' }}>{rows ? A : '—'}</div>
+          <div className="ck">ABSENT TODAY</div>
+          <div className="cbar"><i style={{ background: '#dc2626', width: T ? `${(A / T) * 100}%` : 0 }} /></div>
+        </div>
+        <div className="ct-card">
+          <span className="cic" style={{ background: '#fcf0dd', color: '#d97706' }}>{ATT_ICONS.late}</span>
+          <div className="cnum" style={{ color: '#d97706' }}>{rows ? L : '—'}</div>
+          <div className="ck">LATE TODAY</div>
+          <div className="cbar"><i style={{ background: '#d97706', width: T ? `${(L / T) * 100}%` : 0 }} /></div>
+        </div>
+      </div>
       <div className="ct-toolbar">
-        <input type="date" className="ct-date" value={date} max={TODAY()} onChange={(e) => setDate(e.target.value || TODAY())} aria-label="Attendance date" />
+        <label htmlFor="ct-att-date">DATE</label>
+        <input id="ct-att-date" type="date" value={date} max={TODAY()} onChange={(e) => setDate(e.target.value || TODAY())} />
+        <span className="sp" />
         <button type="button" className="ct-btn solid" onClick={() => setAll('P')}>✓ ALL PRESENT</button>
         <button type="button" className="ct-btn" onClick={() => setAll('A')}>✕ ALL ABSENT</button>
-      </div>
-      <div className="ct-cards">
-        <div className="ct-card"><div className="cnum">{T || '—'}</div><div className="ck">TOTAL STUDENTS</div></div>
-        <div className="ct-card"><div className="cnum" style={{ color: '#0e9f6e' }}>{rows ? P : '—'}</div><div className="ck">PRESENT</div><div className="cbar"><i style={{ background: '#0e9f6e', width: T ? `${(P / T) * 100}%` : 0 }} /></div></div>
-        <div className="ct-card"><div className="cnum" style={{ color: '#dc2626' }}>{rows ? A : '—'}</div><div className="ck">ABSENT</div><div className="cbar"><i style={{ background: '#dc2626', width: T ? `${(A / T) * 100}%` : 0 }} /></div></div>
-        <div className="ct-card"><div className="cnum" style={{ color: '#d97706' }}>{rows ? L : '—'}</div><div className="ck">LATE</div><div className="cbar"><i style={{ background: '#d97706', width: T ? `${(L / T) * 100}%` : 0 }} /></div></div>
+        <ExportCsvButton fetcher={exportRegisterCsv} disabled={!rows} title="Download the day's register as a CSV file" />
       </div>
       <div className="st-list-wrap">
-        <div className="st-scroll" style={{ maxHeight: 430 }}>
-          <div className="st-head"><span>#</span><span>STUDENT NAME</span><span className="r">STATUS · TAP TO CYCLE</span></div>
+        <div className="st-scroll" style={{ maxHeight: 520 }}>
+          <div className="st-head" style={gridCols}><span>#</span><span>STUDENT NAME</span><span style={{ textAlign: 'right' }}>STATUS</span></div>
           {err && <div className="noresult">The register could not be loaded.</div>}
           {!err && !rows && <div className="pd-note">Loading register…</div>}
           {(rows || []).map((s, i) => {
             const st = s.status && ['P', 'A', 'L'].includes(s.status) ? s.status : null;
             const lab = st === 'P' ? '✓ PRESENT' : st === 'A' ? '✕ ABSENT' : st === 'L' ? '⏰ LATE' : '○ NOT MARKED';
             return (
-              <div className="srow ct-att-row" key={s.id}>
+              <div className="srow" style={gridCols} key={s.id}>
                 <span className="rankbadge">{i + 1}</span>
                 <span className="st-name"><span className="avatar">{initials(s.name)}</span><span className="nm">{s.name}</span></span>
-                <span className="ct-att-pill">
-                  <button type="button" className={`stpill ${st || ''}`} onClick={() => cycle(s)}>{lab}</button>
+                <span style={{ textAlign: 'right' }}>
+                  <button
+                    type="button"
+                    className={`stpill${st ? ` ${st}` : ''}`}
+                    style={st ? undefined : { background: 'var(--track)', color: 'var(--muted)' }}
+                    onClick={() => cycle(s)}
+                  >
+                    {lab}
+                  </button>
                 </span>
               </div>
             );
@@ -119,7 +197,8 @@ function CTTasks({ cls }) {
   const [term, setTerm] = useState(1);
   const [tasks, setTasks] = useState(null);
   const [subjects, setSubjects] = useState([]);
-  const [formOpen, setFormOpen] = useState(false);
+  /* designer renders the task form expanded at the top of the page */
+  const [formOpen, setFormOpen] = useState(true);
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
   const [subId, setSubId] = useState(null);
@@ -173,39 +252,42 @@ function CTTasks({ cls }) {
     } catch { setErr(true); }
   };
 
+  const termTabs = (
+    <div className="ctabs">
+      {[1, 2, 3].map((k) => (
+        <button key={k} type="button" className={`gtab${Number(term) === k ? ' active' : ''}`} onClick={() => setTerm(k)}>Term {k}</button>
+      ))}
+    </div>
+  );
+
   return (
     <section className="lvl lvl-2 compact first">
       <SectionHead
         lvl={2}
         title="Task Completion"
         sub="Create assignments and tick off students as they complete them."
-        tag={`CLASS ${cls.name}`}
+        actions={termTabs}
       />
-      <div className="ct-toolbar">
-        <div className="ctabs">
-          {[1, 2, 3].map((k) => (
-            <button key={k} type="button" className={`gtab${Number(term) === k ? ' active' : ''}`} onClick={() => setTerm(k)}>Term {k}</button>
-          ))}
-        </div>
+      <div style={{ marginBottom: 14 }}>
         <button type="button" className="ct-btn solid" onClick={() => setFormOpen((o) => !o)}>+ NEW TASK</button>
       </div>
       {formOpen && (
         <div className="tform">
           <div className="tf-head">TASK DETAILS · TERM {term}</div>
-          <input type="text" placeholder="e.g., Chapter 5 Exercise, Science Project..." value={title} onChange={(e) => setTitle(e.target.value)} />
-          <div className="row">
-            <div className="subj-pills">
-              {subjects.map((s) => (
-                <button key={s.id} type="button" className={`spill${subId === s.id ? ' active' : ''}`} onClick={() => setSubId(s.id)}>{s.name}</button>
-              ))}
-            </div>
+          <label className="tf-label" htmlFor="ct-task-title">TASK NAME *</label>
+          <input id="ct-task-title" type="text" placeholder="e.g., Chapter 5 Exercise, Science Project..." value={title} onChange={(e) => setTitle(e.target.value)} />
+          <div className="tf-label">SUBJECT *</div>
+          <div className="subj-pills">
+            {subjects.map((s) => (
+              <button key={s.id} type="button" className={`spill${subId === s.id ? ' active' : ''}`} onClick={() => setSubId(s.id)}>{s.name}</button>
+            ))}
           </div>
-          <div className="row">
-            <input type="date" style={{ maxWidth: 230 }} value={due} onChange={(e) => setDue(e.target.value)} aria-label="Due date" />
-            <div className="actions" style={{ flex: 1 }}>
-              <button type="button" className="ct-btn" onClick={() => setFormOpen(false)}>Cancel</button>
-              <button type="button" className="ct-btn solid" onClick={create}>✓ Create Task</button>
-            </div>
+          <label className="tf-label" htmlFor="ct-task-due">DUE DATE</label>
+          <input id="ct-task-due" type="date" style={{ maxWidth: 230 }} value={due} onChange={(e) => setDue(e.target.value)} />
+          <div className="tf-hint">Optional — leave blank if no deadline</div>
+          <div className="tf-actions">
+            <button type="button" className="ct-btn" onClick={() => setFormOpen(false)}>Cancel</button>
+            <button type="button" className="btn-primary" onClick={create}>✓ Create Task</button>
           </div>
         </div>
       )}
@@ -233,7 +315,7 @@ function TaskCard({ task, done, pctDone, onToggle, onAll, onDelete }) {
   return (
     <div className="task-card">
       <div className="task-top">
-        <div>
+        <div style={{ minWidth: 0 }}>
           <span className="task-sub">{String(task.subject?.name || 'General').toUpperCase()}</span>
           {task.due_date && <span className="task-due">Due {task.due_date}</span>}
           <div className="task-title">{task.title}</div>
@@ -321,29 +403,37 @@ function CTMarks({ cls }) {
     return vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null;
   }, [grid]);
 
+  const termTabs = (
+    <div className="ctabs">
+      {[1, 2, 3].map((k) => (
+        <button key={k} type="button" className={`gtab${Number(term) === k ? ' active' : ''}`} onClick={() => setTerm(k)}>Term {k}</button>
+      ))}
+    </div>
+  );
+
   return (
     <section className="lvl lvl-3 compact first">
       <SectionHead
         lvl={3}
         title="Academic Marks"
         sub="Enter subject-wise marks for students in your class, term by term."
-        tag={`CLASS ${cls.name}`}
+        actions={termTabs}
       />
-      <div className="ct-toolbar">
-        <div className="ctabs">
-          {[1, 2, 3].map((k) => (
-            <button key={k} type="button" className={`gtab${Number(term) === k ? ' active' : ''}`} onClick={() => setTerm(k)}>Term {k}</button>
-          ))}
-        </div>
-        <button type="button" className="ct-btn solid" onClick={saveAll} disabled={!Object.keys(dirty).length}
-          style={{ opacity: Object.keys(dirty).length ? 1 : 0.5 }}>
-          ✓ SAVE{Object.keys(dirty).length ? ` (${Object.keys(dirty).length})` : ''}
-        </button>
-      </div>
       <div className="ct-cards" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
         <div className="ct-card"><div className="cnum">{grid ? grid.students.length : '—'}</div><div className="ck">TOTAL STUDENTS</div></div>
         <div className="ct-card"><div className="cnum" style={{ color: '#0e9f6e' }}>{avg ?? '--'}</div><div className="ck">CLASS AVERAGE</div></div>
-        <div className="ct-card"><div className="cnum" style={{ fontSize: 22 }}>Term {term}</div><div className="ck">ACTIVE TERM{exam ? ` · ${exam.name}` : ''}</div></div>
+        <div className="ct-card">
+          <div className="cnum" style={{ color: 'var(--lvlD)', fontSize: 22 }}>Term {term}</div>
+          <div className="ck">ACTIVE TERM{exam ? ` · ${exam.name}` : ''}</div>
+        </div>
+      </div>
+      <div className="ct-toolbar">
+        <label htmlFor="ct-marks-exam">EXAM</label>
+        <span id="ct-marks-exam" style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)' }}>{exam ? exam.name : '—'}</span>
+        <span className="sp" />
+        <button type="button" className="ct-btn solid" onClick={saveAll} disabled={!Object.keys(dirty).length}>
+          ✓ SAVE{Object.keys(dirty).length ? ` (${Object.keys(dirty).length})` : ''}
+        </button>
       </div>
       {err && <div className="pd-note">Marks could not be loaded for this term.</div>}
       {exams && !exam && <div className="pd-note">No exam configured for Term {term} in this grade yet.</div>}
@@ -351,30 +441,32 @@ function CTMarks({ cls }) {
       {grid && (
         <div className="mgrid-wrap">
           <div style={{ overflowX: 'auto' }}>
-            <div className="mhead">
-              <span>#</span><span>STUDENT</span>
-              {grid.subjects.map((s) => <span key={s.id}>{String(s.name).slice(0, 6).toUpperCase()}</span>)}
-              <span>TOTAL</span>
+            <div className="st-scroll">
+              <div className="mhead">
+                <span>#</span><span>STUDENT</span>
+                {grid.subjects.map((s) => <span key={s.id}>{subjShort(s.name)}</span>)}
+                <span>TOTAL</span>
+              </div>
+              {grid.students.map((s, i) => {
+                const tot = Object.values(s.marks).reduce((a, v) => a + (v != null && v !== '' ? Number(v) : 0), 0);
+                return (
+                  <div className="mrow" key={s.id}>
+                    <span className="rankbadge">{i + 1}</span>
+                    <span className="st-name"><span className="nm" style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)' }}>{s.name}</span></span>
+                    {grid.subjects.map((sub) => (
+                      <input
+                        key={sub.id} className="mi" inputMode="numeric" maxLength={3}
+                        placeholder="--"
+                        value={s.marks[sub.id] ?? ''}
+                        onChange={(e) => setVal(s.id, sub.id, e.target.value)}
+                        aria-label={`${s.name} ${sub.name}`}
+                      />
+                    ))}
+                    <span className="mtot">{tot || '--'}</span>
+                  </div>
+                );
+              })}
             </div>
-            {grid.students.map((s, i) => {
-              const tot = Object.values(s.marks).reduce((a, v) => a + (v != null && v !== '' ? Number(v) : 0), 0);
-              return (
-                <div className="mrow" key={s.id}>
-                  <span className="rankbadge">{i + 1}</span>
-                  <span className="nm" style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)' }}>{s.name}</span>
-                  {grid.subjects.map((sub) => (
-                    <input
-                      key={sub.id} className="mi" inputMode="numeric" maxLength={3}
-                      placeholder="--"
-                      value={s.marks[sub.id] ?? ''}
-                      onChange={(e) => setVal(s.id, sub.id, e.target.value)}
-                      aria-label={`${s.name} ${sub.name}`}
-                    />
-                  ))}
-                  <span className="mtot">{tot || '--'}</span>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
@@ -385,6 +477,7 @@ function CTMarks({ cls }) {
 /* ─────────────────────────── 05 TEACHING CLASSES ───────────────────────── */
 function CTTeaching({ data, onOpenReport }) {
   const [sel, setSel] = useState('all');
+  const [q, setQ] = useState('');
   const reveal = useReveal();
   const classes = data?.classes || [];
   const tabs = [['all', 'ALL'], ...classes.map((c) => [String(c.id), c.name])];
@@ -400,6 +493,10 @@ function CTTeaching({ data, onOpenReport }) {
     ? [...classes].sort((a, b) => (b.avg ?? 0) - (a.avg ?? 0))[0]
     : null;
   const subjName = data?.teacher?.subject || '';
+  const roster = [...scored].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+  const shown = q.trim()
+    ? roster.filter((k) => k.name.toLowerCase().includes(q.trim().toLowerCase()))
+    : roster;
 
   return (
     <section className="lvl lvl-2 compact first">
@@ -452,11 +549,21 @@ function CTTeaching({ data, onOpenReport }) {
           </div>
         </div>
       )}
-      <div className="st-list-wrap" style={{ marginTop: 14 }}>
+      <div className="searchbar" style={{ marginTop: 16 }}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+        <input type="text" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search students…" aria-label="Search students" />
+        <span className="count">
+          {q.trim()
+            ? `${shown.length} MATCH${shown.length === 1 ? '' : 'ES'}`
+            : `${kids.length} STUDENTS`}
+        </span>
+      </div>
+      <div className="st-list-wrap">
         <div className="st-scroll" style={{ maxHeight: 420 }}>
-          <div className="st-head"><span>RANK</span><span>STUDENT NAME</span><span>CLASS</span><span className="r">{String(subjName).slice(0, 10).toUpperCase()} AVG</span></div>
-          {scored.sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999)).map((k) => (
-            <div className="srow" key={k.id} role="button" tabIndex={0} onClick={() => onOpenReport({ id: k.id })}>
+          <div className="st-head"><span>RANK</span><span>STUDENT NAME</span><span>CLASS</span><span className="r">SUBJECT AVG</span></div>
+          {shown.map((k) => (
+            <div className="srow" key={k.id} role="button" tabIndex={0} onClick={() => onOpenReport({ id: k.id })}
+              onKeyDown={(e) => { if (e.key === 'Enter') onOpenReport({ id: k.id }); }}>
               <span className="rankbadge">#{k.rank ?? '—'}</span>
               <span className="st-name"><span className="avatar">{initials(k.name)}</span><span className="nm">{k.name}</span></span>
               <span className="classchip">{k.class_name}</span>
@@ -467,7 +574,11 @@ function CTTeaching({ data, onOpenReport }) {
               <span className="tb" aria-hidden>→</span>
             </div>
           ))}
-          {!scored.length && <div className="noresult">No marks recorded yet for this selection.</div>}
+          {!shown.length && (
+            <div className="noresult">
+              {q.trim() ? 'No students match your search.' : 'No marks recorded yet for this selection.'}
+            </div>
+          )}
         </div>
       </div>
     </section>
@@ -503,15 +614,17 @@ function CTMy({ report, onOpenFull }) {
       <SectionHead
         lvl={6}
         title="My Report"
-        sub="Your teaching performance across every class you teach."
-        tag={`${report.classes.length} CLASSES · RANK #${t.rank ?? '—'}/${t.of ?? '—'}`}
+        sub="Your own performance report card as this class's teacher."
+        tag="CLASS TEACHER REPORT"
       />
       <div className="card" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <span className="avatar" style={{ width: 52, height: 52, fontSize: 16, background: g.soft, color: g.c }}>{initials(t.name)}</span>
         <div style={{ flex: 1, minWidth: 180 }}>
           <div style={{ fontFamily: "'Lora', Georgia, serif", fontSize: 19, fontWeight: 600, color: 'var(--ink)' }}>{t.name}</div>
           <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.1em', color: 'var(--muted)', marginTop: 4 }}>
-            {String(t.subject || '').toUpperCase()}{t.is_hod ? ' · HOD' : ''}{t.ct_of ? ` · CLASS TEACHER OF ${t.ct_of}` : ''}
+            {String(t.subject || '').toUpperCase()}
+            {t.ct_of ? ` · CLASS TEACHER OF ${String(t.ct_of).toUpperCase()}` : ''}
+            {t.is_hod ? ' · HOD' : ''}
           </div>
         </div>
         <span className="grade-pill" style={{ background: g.soft, color: g.c }}>{Math.round(t.avg ?? 0)}% · {g.label}</span>
@@ -520,7 +633,7 @@ function CTMy({ report, onOpenFull }) {
           <Chip t="T1" n={pct(t.t1)} /><Chip t="T2" n={pct(t.t2)} /><Chip t="T3" n={pct(t.t3)} />
         </div>
       </div>
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <button type="button" className="ct-btn solid" onClick={onOpenFull}>⤓ OPEN / DOWNLOAD FULL REPORT CARD</button>
       </div>
     </section>
@@ -528,7 +641,7 @@ function CTMy({ report, onOpenFull }) {
 }
 
 /* ─────────────────────────────── 07 TIMETABLE ──────────────────────────── */
-function CTTimetable({ teacherId }) {
+function CTTimetable({ teacherId, teacherName }) {
   return (
     <section className="lvl lvl-2 compact first">
       <SectionHead
@@ -537,7 +650,7 @@ function CTTimetable({ teacherId }) {
         sub="Your personal teaching schedule — where you are, period by period."
         tag="PERSONAL GRID"
       />
-      <PersonalTimetable teacherId={teacherId} />
+      <PersonalTimetable teacherId={teacherId} label={teacherName ? `Personal timetable · ${teacherName}` : undefined} />
     </section>
   );
 }
@@ -557,14 +670,16 @@ function ModeButton() {
   );
 }
 
-/* CTWorkspace — the class-teacher console CONTENT (pagehead + pages +
-   report modals + toast). Purely driven by props so it can render standalone
-   (CTConsole below) or embedded in the principal dashboard's v15 shell when
-   the signed-in user also holds a class-teacher post (dual-mode sidebar). */
+/* CTWorkspace — the class-teacher console CONTENT (v16 pagehead + tier band
+   + pages + report modals + toast). Purely driven by props so it can render
+   standalone (CTConsole below) or embedded in the principal dashboard's
+   shell when the signed-in user also holds a class-teacher post (dual-mode
+   sidebar; the .pd-root.ct-root CSS hides that shell's AI rail for us). */
 export function CTWorkspace({ me, teach, page = 'ctHome' }) {
   const [reportId, setReportId] = useState(null);
   const [showMyReport, setShowMyReport] = useState(false);
   const [toast, setToast] = useState(null);
+  const [dashInfo, setDashInfo] = useState(null);
 
   /* the workspace owns the scrolling <main> in BOTH embeds (standalone
      console + principal-dashboard dual mode, where the shell's mainRef is
@@ -585,6 +700,18 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  /* tier-band numbers (N STUDENTS) — same payload the My Class page renders;
+     one light fetch per class so the band reads real API data everywhere */
+  const clsId = me?.class?.id;
+  useEffect(() => {
+    if (!clsId) return undefined;
+    let alive = true;
+    fetchCtClassDashboard(clsId)
+      .then((d) => { if (alive) setDashInfo(d?.info || null); })
+      .catch(() => { /* the band simply omits the count */ });
+    return () => { alive = false; };
+  }, [clsId]);
+
   if (!me) {
     return (
       <main className="v15-main pd-main">
@@ -595,44 +722,57 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
 
   const cls = me.class;
   const teacher = me.teacher;
+  /* designer tag: "CLASS 10-EMERALD · GNPS MAILLOOR · 30 STUDENTS" — no CT
+     endpoint exposes a school name, so that segment is included only when
+     the API provides one (me.school?.name / dashInfo.school_name). */
+  const bandTag = [
+    `CLASS ${cls.name}`,
+    me.school?.name || dashInfo?.school_name || null,
+    dashInfo?.students != null ? `${dashInfo.students} STUDENTS` : null,
+  ].filter(Boolean).join(' · ').toUpperCase();
 
   return (
     <main className="v15-main pd-main" ref={mainRef}>
-      <header className="pagehead">
-        <div>
-          <div className="eyebrow">Fetch-X · Class Teacher</div>
-          <h1>Class Teacher — {cls.name}</h1>
-          <div className="subtitle">
-            {teacher.name} · {teacher.subject?.name || '—'} · Grade {cls.grade}
-          </div>
-        </div>
-        <div className="pagehead-mid gsearch" />
-        <div className="pagehead-actions">
-          <ModeButton />
-        </div>
-      </header>
+      <PageHead
+        tier="ct"
+        eyebrow="Fetch-X · Class Teacher Console"
+        title="Class Teacher Dashboard"
+        subtitle={`Class Teacher · Classroom intelligence for ${cls.name}`}
+        actions={<ModeButton />}
+      />
 
-      {page === 'ctHome' && (
-        <ClassDetail
-          classId={cls.id}
-          classesAll={[]}
-          fetcher={fetchCtClassDashboard}
-          embedded
-          savedIds={new Set()}
-          onBookmark={() => {}}
-          onOpenReport={(s) => setReportId(s.id)}
+      <Tier tier="ct">
+        <TierBand
+          tier="ct"
+          lvl={3}
+          icon={TIER_ICONS.ct}
+          eyebrow="TIER 03 · CLASSROOM"
+          copy={`Daily attendance, tasks, marks and reports for ${cls.name}.`}
+          tag={bandTag}
         />
-      )}
-      {page === 'ctAtt' && <CTAttendance cls={cls} />}
-      {page === 'ctTask' && <CTTasks cls={cls} />}
-      {page === 'ctMarks' && <CTMarks cls={cls} />}
-      {page === 'ctTeach' && (
-        <CTTeaching data={teach} onOpenReport={(s) => setReportId(s.id)} />
-      )}
-      {page === 'ctMy' && (
-        <CTMy report={teach?.__report || null} onOpenFull={() => setShowMyReport(true)} />
-      )}
-      {page === 'ctTT' && <CTTimetable teacherId={teacher.id} />}
+
+        {page === 'ctHome' && (
+          <ClassDetail
+            classId={cls.id}
+            classesAll={[]}
+            fetcher={fetchCtClassDashboard}
+            embedded
+            savedIds={new Set()}
+            onBookmark={() => {}}
+            onOpenReport={(s) => setReportId(s.id)}
+          />
+        )}
+        {page === 'ctAtt' && <CTAttendance cls={cls} />}
+        {page === 'ctTask' && <CTTasks cls={cls} />}
+        {page === 'ctMarks' && <CTMarks cls={cls} />}
+        {page === 'ctTeach' && (
+          <CTTeaching data={teach} onOpenReport={(s) => setReportId(s.id)} />
+        )}
+        {page === 'ctMy' && (
+          <CTMy report={teach?.__report || null} onOpenFull={() => setShowMyReport(true)} />
+        )}
+        {page === 'ctTT' && <CTTimetable teacherId={teacher.id} teacherName={teacher.name} />}
+      </Tier>
 
       {reportId != null && createPortal(
         <ReportCardModal studentId={reportId} onClose={() => setReportId(null)} />,
@@ -660,10 +800,6 @@ export default function CTConsole() {
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try { return localStorage.getItem('si-nav') === '1'; } catch { return false; }
   });
-  const [aiCollapsed, setAiCollapsed] = useState(() => {
-    try { return localStorage.getItem('fx-ai') === '1'; } catch { return false; }
-  });
-  const [aiOpenMobile, setAiOpenMobile] = useState(false);
 
   useEffect(() => {
     fetchCtMe().then(setMe).catch(() => setMeErr(true));
@@ -680,7 +816,6 @@ export default function CTConsole() {
   useEffect(() => {
     try { localStorage.setItem('si-nav', navCollapsed ? '1' : '0'); } catch { /* ignore */ }
   }, [navCollapsed]);
-  useEffect(() => { try { localStorage.setItem('fx-ai', aiCollapsed ? '1' : '0'); } catch { /* ignore */ } }, [aiCollapsed]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -690,10 +825,6 @@ export default function CTConsole() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  const toggleAi = () => {
-    if (window.matchMedia('(max-width:1150px)').matches) setAiOpenMobile((o) => !o);
-    else setAiCollapsed((c) => !c);
-  };
   const signOut = () => { logout(); navigate('/'); };
   const navGo = useCallback((key) => {
     setMobNav(false);
@@ -715,11 +846,12 @@ export default function CTConsole() {
   const teacher = me.teacher;
 
   return (
-    <div className={`pd-root v15-root ct-root${navCollapsed ? ' nav-collapsed' : ''}${aiCollapsed ? ' ai-collapsed' : ''}${aiOpenMobile ? ' ai-open' : ''}${mobNav ? ' mob-nav' : ''}`}>
+    <div className={`pd-root v15-root ct-root${navCollapsed ? ' nav-collapsed' : ''}${mobNav ? ' mob-nav' : ''}`}>
       <LevelThemeStyle />
       <DashSidebar
         ct
         ctLabel={cls.name.toUpperCase()}
+        roleLabel="CLASS TEACHER"
         active={page}
         onGo={navGo}
         collapsed={navCollapsed}
@@ -734,11 +866,6 @@ export default function CTConsole() {
         <Menu strokeWidth={2.2} />
       </button>
       {mobNav && <div className="v15-mobbackdrop" onClick={() => setMobNav(false)} role="presentation" />}
-
-      <AiPanel collapsed={aiCollapsed} onToggle={toggleAi} subtitle="Analysing your class" />
-      <button type="button" className="ai-fab" onClick={toggleAi} aria-label="Open AI panel">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5c.7 5 3.3 7.6 8.3 8.3-5 .7-7.6 3.3-8.3 8.3-.7-5-3.3-7.6-8.3-8.3 5-.7 7.6-3.3 8.3-8.3z" /></svg>
-      </button>
     </div>
   );
 }

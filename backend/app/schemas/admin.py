@@ -90,3 +90,36 @@ class ExtraTeacherCreate(BaseModel):
         if len(s) > 120:
             raise ValueError("Name must be at most 120 characters")
         return s
+
+
+class StudentUpdate(BaseModel):
+    """v16 admin 'Edit Student' modal (PUT /admin/students/{id}).
+
+    Target class may be given either directly (class_id) or as the
+    (grade, section) pair the designer's CLASS (GRADE) + SECTION selects
+    produce — if class_id is set it wins, otherwise grade + section must
+    both be present and resolve to a class of the student's school.
+    """
+    name: Optional[str] = None
+    class_id: Optional[int] = None
+    grade: Optional[int] = None
+    section: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class StaffUpdate(BaseModel):
+    """v16 admin 'Edit Staff' modal (PUT /admin/staff/{teacher_user_id}).
+
+    - full_name: rename when provided.
+    - subject_id: department transfer — every TeacherAssignment row of the
+      teacher (their class_id=NULL HOD row + all teaching-load rows) moves
+      to the new subject; when omitted the subject is unchanged.
+    - ct_class_id: the CLASS TEACHER OF select. An explicit null means
+      "— Not a class teacher —" (the post is cleared); a class id claims
+      the post and displaces that class's previous CT. Omitted = unchanged.
+    - notes: DESCRIPTION & DETAILS textarea (explicit null clears it).
+    """
+    full_name: Optional[str] = None
+    subject_id: Optional[int] = None
+    ct_class_id: Optional[int] = None
+    notes: Optional[str] = None
