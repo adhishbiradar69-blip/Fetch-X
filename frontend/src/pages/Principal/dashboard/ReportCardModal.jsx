@@ -255,7 +255,7 @@ export default function ReportCardModal({ studentId, onClose, totalStudents, sav
                   type="button"
                   className={`btn-close bm${saved ? ' on' : ''}`}
                   title="Save to folder"
-                  onClick={(e) => onBookmark(e, { id: rep.student?.id, name: rep.student?.name })}
+                  onClick={(e) => onBookmark?.(e, { id: rep.student?.id, name: rep.student?.name })}
                 >
                   <Bookmark strokeWidth={2} />
                 </button>

@@ -53,6 +53,64 @@ export async function fetchCpTeachers({ search = '', page = 1, pageSize = 50, mi
   };
 }
 
+/* ───────────────────────────── v17 ───────────────────────────────────── */
+
+/* GET /chairperson/classes/{id}/inspect — same contract as the principal's
+   /principal/class-detail (info, subjects t1/t2/t3, distribution, ranked
+   students) + an additive `school` {id, name}. Feeds the shared ClassDetail
+   view via its `fetcher` prop. */
+export const fetchCpClassInspect = (id) => get(`/chairperson/classes/${id}/inspect`);
+
+/* POST /chairperson/compare — group-scoped multi-entity metrics (class /
+   student / folder; schools + grades come from the already-loaded bundle).
+   Same response contract as POST /principal/compare: {entities:[{key,name,
+   marks,attendance,tasks,t1,t2,t3,overall}]}. */
+export const cpCompareEntities = (entities) =>
+  api.post('/chairperson/compare', { entities }).then((r) => r.data);
+
+/* ── bundle → search / saved-classes material (v17) ────────────────────── */
+
+/* Flat class list from the v17 bundle (sections carry ids now). Classes
+   without an id (stale cached bundle from before the backend change) are
+   skipped rather than guessed. One row per class:
+   {id, name "9-A", grade, section, avg, schoolId, schoolName} */
+export const classesAllFromBundle = (bundle) =>
+  (bundle?.schools || []).flatMap((S) => (S.grades || []).flatMap((g) => (
+    (g.sections || [])
+      .filter((c) => c.id != null)
+      .map((c) => ({
+        id: c.id,
+        name: `${g.grade}-${c.section}`,
+        grade: g.grade,
+        section: c.section,
+        avg: c.avg,
+        att: c.att,
+        students: c.students,
+        schoolId: S.id,
+        schoolName: S.name,
+      }))
+  )));
+
+/* GlobalSearch SCHOOLS section rows: {id, name, avg, rank, of} */
+export const schoolsForSearch = (schools, nSchools) =>
+  (schools || []).map((S) => ({
+    id: S.id,
+    name: S.name,
+    avg: S.overall,
+    rank: S.org_rank,
+    of: nSchools,
+  }));
+
+/* GlobalSearch GRADES section rows: one per school × grade
+   ({grade, avg, schoolId}) — the chairperson opens the grade REPORT per
+   school, so the same grade number appears once per branch. */
+export const gradesForSearch = (schools) =>
+  (schools || []).flatMap((S) => (S.grades || []).map((g) => ({
+    grade: g.grade,
+    avg: g.avg,
+    schoolId: S.id,
+  })));
+
 /* ───────────────────────── derive helpers ─────────────────────────── */
 
 /* The designer's combined OVERALL — (marks + tasks + attendance) ÷ 3.

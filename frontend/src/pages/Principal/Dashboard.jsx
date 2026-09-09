@@ -17,12 +17,13 @@ import {
   fetchScoreDistribution, fetchSchoolOverview, fetchSchoolRank, fetchStats, fetchStudents,
   fetchTeachers, fetchTermAverages,
 } from './dashboard/data';
-import { loadFolders, saveFolders, pct } from './dashboard/util';
+import { loadClassFolders, loadFolders, mean, pct, saveClassFolders, saveFolders } from './dashboard/util';
 import { SectionSchool, SectionSubjects, SectionClasses, SectionStudents, SectionTeachers } from './dashboard/Sections';
 import { PageHead, TierBand, Tier } from '../../components/v16/Shell';
 import { TIER_ICONS } from '../../components/v16/icons';
 import { csvStamp, fetchAllPages } from '../../lib/csv';
 import ClassDetail from './dashboard/ClassDetail';
+import GradeDetail from './dashboard/GradeDetail';
 import SubjectDetail from './dashboard/SubjectDetail';
 import SavedStudents from './dashboard/SavedStudents';
 import ReportCardModal from './dashboard/ReportCardModal';
@@ -48,9 +49,16 @@ const PAGE_SIZE = 30;
 const parseHash = (h) => {
   if (h && h.startsWith('class=')) return { view: 'class', id: decodeURIComponent(h.slice(6)) };
   if (h && h.startsWith('subject=')) return { view: 'subject', id: decodeURIComponent(h.slice(8)) };
+  if (h && h.startsWith('grade=')) return { view: 'grade', id: decodeURIComponent(h.slice(6)) }; // v17 grade modal
   if (h === 'saved') return { view: 'saved', id: null };
   if (h === 'ai') return { view: 'ai', id: null }; // the AI's own full page
   return { view: 'dash', id: null };
+};
+
+const gradeOfHash = (h) => {
+  const r = parseHash(h);
+  const n = Number(r.view === 'grade' ? r.id : NaN);
+  return Number.isFinite(n) ? n : null;
 };
 
 export default function PrincipalDashboard() {
@@ -91,18 +99,27 @@ export default function PrincipalDashboard() {
 
   /* ---------------- folders (localStorage fx-folders) ---------------- */
   const [folders, setFolders] = useState(loadFolders);
-  const [bmPop, setBmPop] = useState(null); // { student, left, top }
+  const [bmPop, setBmPop] = useState(null); // { kind: 'stu'|'cls', student?, cls?, left, top }
   const [bmNew, setBmNew] = useState('');
   const savedIds = useMemo(() => new Set(folders.flatMap((f) => f.studentIds)), [folders]);
   useEffect(() => { saveFolders(folders); }, [folders]);
 
+  /* v17 class folders (localStorage fx-class-folders) — the same bookmark
+     system for whole classes; the popover branches on bmPop.kind */
+  const [classFolders, setClassFolders] = useState(loadClassFolders);
+  const classSavedIds = useMemo(() => new Set(classFolders.flatMap((f) => f.classIds)), [classFolders]);
+  useEffect(() => { saveClassFolders(classFolders); }, [classFolders]);
+
   /* ---------------- views + modals ---------------- */
   const [route, setRoute] = useState(() => parseHash(location.hash.replace(/^#/, '')));
-  const view = route.view; // dash | class | subject | saved
+  const view = route.view; // dash | class | subject | grade | saved
   const [reportId, setReportId] = useState(null);
   const [teacherId, setTeacherId] = useState(null);
   const [showCompare, setShowCompare] = useState(false);
   const [showAperf, setShowAperf] = useState(false);
+  /* v17 grade detail modal — deep-linkable via #grade=<g> (state follows
+     the hash in applyRoute; GlobalSearch opens it through openGrade) */
+  const [showGrade, setShowGrade] = useState(() => gradeOfHash(location.hash.replace(/^#/, '')));
   const [toast, setToast] = useState(null);
 
   /* ---------------- AI panel ---------------- */
@@ -153,10 +170,11 @@ export default function PrincipalDashboard() {
 
   const showToast = (message, type = 'error') => setToast({ message, type });
 
-  /* ================= hash routing (#class=, #subject=, #saved) ======= */
+  /* ================= hash routing (#class=, #subject=, #grade=, #saved) == */
   const applyRoute = useCallback((h) => {
     setBmPop(null);
     setRoute(parseHash(h));
+    setShowGrade(gradeOfHash(h));
     mainRef.current?.scrollTo({ top: 0 });
   }, []);
 
@@ -296,6 +314,21 @@ export default function PrincipalDashboard() {
     };
   }, [query, minAvg]);
 
+  /* ================= v17 class folders ================= */
+  const createClassFolder = (name) => {
+    const n = (name || '').trim();
+    if (!n) return null;
+    const f = { id: `c${Date.now()}${Math.floor(Math.random() * 999)}`, name: n, classIds: [] };
+    setClassFolders((p) => [...p, f]);
+    return f;
+  };
+  const deleteClassFolder = (id) => setClassFolders((p) => p.filter((f) => f.id !== id));
+  const toggleClassInFolder = (folderId, cid) => setClassFolders((p) => p.map((f) => (
+    f.id === folderId
+      ? { ...f, classIds: f.classIds.includes(cid) ? f.classIds.filter((x) => x !== cid) : [...f.classIds, cid] }
+      : f
+  )));
+
   /* ================= folders ================= */
   const createFolder = (name) => {
     const n = (name || '').trim();
@@ -311,13 +344,33 @@ export default function PrincipalDashboard() {
       : f
   )));
 
-  const onBookmark = (e, student) => {
-    if (!student?.id) return;
+  /* shared popover positioning (viewport-fixed, portal renders over modals) */
+  const bmPos = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const w = 230;
     const left = Math.min(Math.max(10, rect.left - 90), window.innerWidth - w - 10);
     const top = rect.bottom + 8 + (window.innerHeight - rect.bottom < 260 ? -rect.height - 250 : 0);
-    setBmPop({ student: { id: student.id, name: student.name || `Student ${student.id}` }, left, top });
+    return { left, top };
+  };
+
+  const onBookmark = (e, student) => {
+    if (!student?.id) return;
+    setBmPop({ kind: 'stu', student: { id: student.id, name: student.name || `Student ${student.id}` }, ...bmPos(e) });
+  };
+  /* v17: the same popover, class flavor — kind branches the folder list */
+  const onClassBookmark = (e, cls) => {
+    if (!cls?.id) return;
+    setBmPop({ kind: 'cls', cls: { id: cls.id, name: cls.name || `Class ${cls.id}` }, ...bmPos(e) });
+  };
+  const bmCreateAndSave = () => {
+    if (!bmPop) return;
+    if (bmPop.kind === 'cls') {
+      const f = createClassFolder(bmNew);
+      if (f) { toggleClassInFolder(f.id, bmPop.cls.id); setBmNew(''); }
+    } else {
+      const f = createFolder(bmNew);
+      if (f) { toggleInFolder(f.id, bmPop.student.id); setBmNew(''); }
+    }
   };
 
   /* ================= keyboard: Ctrl K / "/" / Escape ================= */
@@ -336,6 +389,7 @@ export default function PrincipalDashboard() {
         setTeacherId(null);
         setShowCompare(false);
         setShowAperf(false);
+        setShowGrade(null);
         setMobNav(false);
       }
     };
@@ -373,6 +427,29 @@ export default function PrincipalDashboard() {
     setBmPop(null);
     go(`subject=${s.id ?? s.name}`);
   };
+  /* v17 grade detail — deep-linked with #grade=<g> so back/forward keep
+     working; the hash is pushed directly (no scroll reset) */
+  const openGrade = (g) => {
+    setBmPop(null);
+    const n = Number(g?.grade ?? g);
+    if (!Number.isFinite(n)) return;
+    setShowGrade(n);
+    const target = `grade=${n}`;
+    if (location.hash.replace(/^#/, '') !== target) {
+      try { history.pushState(null, '', `#${target}`); } catch { /* ignore */ }
+    }
+  };
+  const closeGrade = () => {
+    setShowGrade(null);
+    if (route.view === 'grade') go(''); // deep-linked open — restore the dash hash
+  };
+  /* the principal's group is exactly one school — "opening" it just
+     returns to the top of the dashboard (honest no-op) */
+  const openSchool = () => {
+    setBmPop(null);
+    if (view !== 'dash') go('');
+    else mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const signOut = () => { logout(); navigate('/'); };
   const isAdminRole = ['super_admin', 'school_admin', 'admin'].includes(user?.role);
   const inCtMode = uiMode === 'ct' && !!ctMe;
@@ -388,19 +465,36 @@ export default function PrincipalDashboard() {
     ? `Search ${stats.students} students, ${stats.classes} classes, teachers, subjects…`
     : 'Search students, classes, subjects, teachers…';
 
+  /* v17 grade entries for GlobalSearch — unique grades with the mean of
+     their classes' averages */
+  const gradesFromClasses = useMemo(() => {
+    const byGrade = new Map();
+    (classesAll || []).forEach((c) => {
+      if (!byGrade.has(c.grade)) byGrade.set(c.grade, []);
+      byGrade.get(c.grade).push(c.avg);
+    });
+    return [...byGrade.entries()]
+      .map(([g, avgs]) => {
+        const vals = avgs.filter((a) => a != null);
+        return { grade: g, avg: vals.length ? mean(vals) : undefined };
+      })
+      .sort((a, b) => a.grade - b.grade);
+  }, [classesAll]);
+
   /* ================= render ================= */
   const booting = !stats && !statsErr;
   return (
     <div className={`pd-root v15-root${navCollapsed ? ' nav-collapsed' : ''}${aiCollapsed ? ' ai-collapsed' : ''}${aiOpenMobile ? ' ai-open' : ''}${mobNav ? ' mob-nav' : ''}${inCtMode ? ' ct-root' : ''}`}>
       <LevelThemeStyle />
       <DashSidebar
-        active={view === 'dash' ? 'schoolSec' : (view === 'ai' ? 'aiSec' : view)}
+        active={(view === 'dash' || view === 'grade') ? 'schoolSec' : (view === 'ai' ? 'aiSec' : view)}
         onGo={navGo}
         collapsed={navCollapsed}
         onToggle={() => setNavCollapsed((c) => !c)}
         savedCount={savedIds.size}
         userName={user?.full_name}
         roleLabel={roleLabel}
+        schoolLabel={school?.name ? SCHOOL.toUpperCase() : undefined}
         onSignOut={signOut}
         mode={uiMode}
         ctGroup={ctMe ? { label: (ctMe.class?.name || '').toUpperCase(), active: ctPage } : null}
@@ -440,6 +534,10 @@ export default function PrincipalDashboard() {
               onOpenStudent={openReport}
               onOpenTeacher={openTeacher}
               onOpenSubject={openSubject}
+              schools={school ? [{ id: school.id, name: school.name, avg: termAvg?.overall?.all, rank: rank?.rank, of: rank?.of }] : []}
+              grades={gradesFromClasses}
+              onOpenSchool={openSchool}
+              onOpenGrade={openGrade}
             />
           )}
           actions={(
@@ -465,7 +563,7 @@ export default function PrincipalDashboard() {
           )}
         />
 
-        {view === 'dash' && (
+        {view === 'dash' || view === 'grade' ? (
           <div id="dashView">
             {/* v16 tier device: TIER 01 · SCHOOL band fused to the level stack */}
             <Tier tier="pr" id="tierPR">
@@ -494,6 +592,8 @@ export default function PrincipalDashboard() {
               grade={grade}
               onGrade={changeGrade}
               onOpenClass={openClass}
+              classSavedIds={classSavedIds}
+              onClassBookmark={onClassBookmark}
             />
             <SectionStudents
               query={query}
@@ -521,7 +621,7 @@ export default function PrincipalDashboard() {
             />
             </Tier>
           </div>
-        )}
+        ) : null}
 
         {view === 'class' && route.id != null && (
           <ClassDetail
@@ -554,6 +654,12 @@ export default function PrincipalDashboard() {
             onBack={() => go('')}
             onOpenReport={openReport}
             savedCount={savedIds.size}
+            classFolders={classFolders}
+            onCreateClassFolder={createClassFolder}
+            onDeleteClassFolder={deleteClassFolder}
+            onRemoveClass={toggleClassInFolder}
+            onOpenClass={openClass}
+            classesAll={classesAll || []}
           />
         )}
         </>
@@ -590,43 +696,59 @@ export default function PrincipalDashboard() {
         </button>
       )}
 
-      {/* bookmark-to-folder popover */}
+      {/* bookmark-to-folder popover — one popover, branched on kind
+          (students land in fx-folders, classes in fx-class-folders) */}
       {bmPop && createPortal(
         <div className="bm-pop open" style={{ left: bmPop.left, top: bmPop.top }} onMouseDown={(e) => e.stopPropagation()}>
-          <div className="bmp-t">SAVE · {bmPop.student.name.toUpperCase()}</div>
-          <div>
-            {folders.length ? folders.map((f) => (
-              <label className="bmopt" key={f.id}>
-                <input
-                  type="checkbox"
-                  checked={f.studentIds.includes(bmPop.student.id)}
-                  onChange={() => toggleInFolder(f.id, bmPop.student.id)}
-                />
-                <i className="bx" />
-                <span>{f.name}</span>
-                <em>{f.studentIds.length}</em>
-              </label>
-            )) : <div className="bmp-empty">No folders yet — create one below.</div>}
-          </div>
+          <div className="bmp-t">{bmPop.kind === 'cls'
+            ? `SAVE CLASS · ${bmPop.cls.name.toUpperCase()}`
+            : `SAVE · ${bmPop.student.name.toUpperCase()}`}</div>
+          {bmPop.kind === 'cls' ? (
+            <div>
+              {classFolders.length ? classFolders.map((f) => (
+                <label className="bmopt" key={f.id}>
+                  <input
+                    type="checkbox"
+                    checked={f.classIds.includes(bmPop.cls.id)}
+                    onChange={() => toggleClassInFolder(f.id, bmPop.cls.id)}
+                  />
+                  <i className="bx" />
+                  <span>{f.name}</span>
+                  <em>{f.classIds.length}</em>
+                </label>
+              )) : <div className="bmp-empty">No class folders yet — create one below.</div>}
+            </div>
+          ) : (
+            <div>
+              {folders.length ? folders.map((f) => (
+                <label className="bmopt" key={f.id}>
+                  <input
+                    type="checkbox"
+                    checked={f.studentIds.includes(bmPop.student.id)}
+                    onChange={() => toggleInFolder(f.id, bmPop.student.id)}
+                  />
+                  <i className="bx" />
+                  <span>{f.name}</span>
+                  <em>{f.studentIds.length}</em>
+                </label>
+              )) : <div className="bmp-empty">No folders yet — create one below.</div>}
+            </div>
+          )}
           <div className="bmp-new">
             <input
-              placeholder="New folder name"
+              placeholder={bmPop.kind === 'cls' ? 'New class folder name' : 'New folder name'}
               value={bmNew}
               onChange={(e) => setBmNew(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
-                  const f = createFolder(bmNew);
-                  if (f) { toggleInFolder(f.id, bmPop.student.id); setBmNew(''); }
+                  bmCreateAndSave();
                 }
               }}
             />
             <button
               type="button"
-              onClick={() => {
-                const f = createFolder(bmNew);
-                if (f) { toggleInFolder(f.id, bmPop.student.id); setBmNew(''); }
-              }}
+              onClick={bmCreateAndSave}
               aria-label="Create folder and save"
             >
               <Plus strokeWidth={2.6} />
@@ -654,6 +776,8 @@ export default function PrincipalDashboard() {
           onOpenClass={openClass}
           onOpenReport={openReport}
           onBookmark={onBookmark}
+          classSavedIds={classSavedIds}
+          onClassBookmark={onClassBookmark}
           totalClasses={(classesAll || []).length}
         />,
         document.body,
@@ -663,6 +787,7 @@ export default function PrincipalDashboard() {
           onClose={() => setShowCompare(false)}
           classesAll={classesAll || []}
           folders={folders}
+          school={school}
         />,
         document.body,
       )}
@@ -671,6 +796,21 @@ export default function PrincipalDashboard() {
           onClose={() => setShowAperf(false)}
           classesAll={classesAll || []}
           folders={folders}
+        />,
+        document.body,
+      )}
+
+      {/* v17 grade detail — a route-synced modal: opening a class from its
+          section bars changes the hash, which closes this via applyRoute */}
+      {showGrade != null && createPortal(
+        <GradeDetail
+          grade={showGrade}
+          school={school}
+          onClose={closeGrade}
+          onOpenClass={openClass}
+          classesAll={classesAll || []}
+          onBookmarkStudent={onBookmark}
+          savedIds={savedIds}
         />,
         document.body,
       )}

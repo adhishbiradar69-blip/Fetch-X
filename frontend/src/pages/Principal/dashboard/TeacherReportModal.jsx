@@ -12,10 +12,10 @@
    per-term student scores). */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Award, Bookmark, ClipboardCheck, Download, Printer, School, Trophy, UserCheck, Users, X,
+  Award, Bookmark, ClipboardCheck, Clock, Download, Printer, School, Trophy, UserCheck, Users, X,
 } from 'lucide-react';
 import { printCardEl, printStamp } from './printCard';
-import { fetchTeacherReport } from './data';
+import { fetchTeacherReport, fetchTeacherTimetable } from './data';
 import { BarChart, Donut, GroupedBars, LineChart, Trend } from './charts';
 import { bandOf, initials, mean, pct } from './util';
 
@@ -41,7 +41,10 @@ function RepStat({ label, chips, all, C }) {
 }
 
 /* fetcher: principal's report endpoint, or the CT console's self-report. */
-export default function TeacherReportModal({ teacherId, onClose, onOpenClass, onBookmark, onOpenReport, totalClasses, fetcher }) {
+export default function TeacherReportModal({
+  teacherId, onClose, onOpenClass, onBookmark, onOpenReport, totalClasses, fetcher,
+  classSavedIds = null, onClassBookmark,
+}) {
   const [rep, setRep] = useState(null);
   const [err, setErr] = useState(false);
   const [kidQ, setKidQ] = useState('');
@@ -129,6 +132,23 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
       }))
       .sort((a, b) => b.val - a.val);
   }, [rep, term]);
+
+  /* v17: PERIODS / WEEK — the teacher's personal timetable load
+     (/timetable/teacher/{id} summary.weekly_periods; false = endpoint
+     unavailable, renders "—") */
+  const [tt, setTt] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const run = () => {
+      setTt(null);
+      if (teacherId == null) return;
+      fetchTeacherTimetable(teacherId)
+        .then((d) => { if (alive) setTt(d); })
+        .catch(() => { if (alive) setTt(false); });
+    };
+    run();
+    return () => { alive = false; };
+  }, [teacherId]);
 
   if (teacherId == null) return null;
 
@@ -385,6 +405,10 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
                   <div><div className="k">TASK COMPLETION (AVG)</div><div className="v">{pct(t.tasks_avg)}%</div></div>
                 </div>
                 <div className="stat-cell">
+                  <div className="ic"><Clock strokeWidth={1.8} /></div>
+                  <div><div className="k">PERIODS / WEEK</div><div className="v">{tt?.summary?.weekly_periods ?? '—'}</div></div>
+                </div>
+                <div className="stat-cell">
                   <div className="ic"><Award strokeWidth={1.8} /></div>
                   <div><div className="k">BEST CLASS</div><div className="v" style={{ fontSize: 12 }}>{best ? best.name : '—'}</div></div>
                 </div>
@@ -477,6 +501,19 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
                     <span className={`rank-pill${c.rank != null && c.rank <= 3 ? ' top' : ''}`}>
                       #{c.rank ?? '—'}{totalClasses ? <span className="of30">/{totalClasses}</span> : null}
                     </span>
+                    {onClassBookmark && (
+                      <button
+                        type="button"
+                        className={`bm${classSavedIds?.has(c.id) ? ' on' : ''}`}
+                        style={{ width: 26, height: 26, flexShrink: 0 }}
+                        title="Save class to folder"
+                        aria-label={`Save ${c.name} to folder`}
+                        onClick={(e) => { e.stopPropagation(); onClassBookmark(e, { id: c.id, name: c.name }); }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <Bookmark strokeWidth={2} />
+                      </button>
+                    )}
                   </div>
                   <div className="s-body">
                     <div className="chips">
@@ -542,7 +579,7 @@ export default function TeacherReportModal({ teacherId, onClose, onOpenClass, on
                         className="bm"
                         title="Save to folder"
                         aria-label={`Save ${s.name} to folder`}
-                        onClick={(e) => { e.stopPropagation(); onBookmark(e, s); }}
+                        onClick={(e) => { e.stopPropagation(); onBookmark?.(e, s); }}
                       >
                         <Bookmark strokeWidth={2} />
                       </button>

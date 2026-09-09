@@ -8,7 +8,7 @@ already enforce per-class access); this router adds the read-model the
 console needs and which the principal router intentionally refuses to serve
 to class_teacher accounts:
 
-  GET /ct/me                  → teacher profile + CT class + teaching classes
+  GET /ct/me                  → teacher profile + CT class + school
   GET /ct/class-dashboard     → principal-grade class detail for the CT class
                                 (overview strip, subjects, distribution,
                                 ranked students, attendance / tasks rollups)
@@ -97,7 +97,9 @@ def _ct_class_of(user: User, db: Session, school: School, class_id: int = None) 
 
 @router.get("/me")
 def ct_me(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Console bootstrap: who am I, which class, what do I teach."""
+    """Console bootstrap: who am I, which class, what do I teach — plus the
+    school (v17) so the UI's tier tag can read "CLASS 10-EMERALD · GNPS
+    MAILLOOR · 30 STUDENTS" without a leadership-scoped call."""
     if user.role not in STAFF_ROLES:
         raise HTTPException(status_code=403, detail="The console is for teaching staff.")
     school = _school_of(user, db)
@@ -144,6 +146,9 @@ def ct_me(db: Session = Depends(get_db), user=Depends(get_current_user)):
         },
         "class": {"id": cls.id, "name": f"{cls.grade}-{cls.section}",
                   "grade": cls.grade, "section": cls.section},
+        # v17: the console's school — the designer's tier tag renders
+        # "CLASS <CLASS> · <SCHOOL> · N STUDENTS".
+        "school": {"id": school.id, "name": school.name},
     }
 
 

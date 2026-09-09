@@ -154,6 +154,7 @@ export default function DashSidebar({
   /* ---- v16 ---- */
   logo = true,              // 48px .school-logo block above the brand row
   roleLabel = null,         // "{ROLE} · SIGN OUT" prefix (defaults to userName)
+  schoolLabel = null,       // v17: appended to the PRINCIPAL group label
   groups = null,            // generic v16 groups (see header)
   activeGroup = null,       // key of the active group
   onGroupClick = null,      // group-label click (developer build tier switch)
@@ -245,7 +246,7 @@ export default function DashSidebar({
       <BrandRow onToggle={onToggle} />
 
       <nav className="dsb-nav" aria-label="Dashboard sections">
-        <GroupLabel label={`PRINCIPAL${ctGroup ? '' : ''}`} dot="#0e7490" active={mode === 'p'} />
+        <GroupLabel label={`PRINCIPAL${schoolLabel ? ` · ${schoolLabel}` : ''}`} dot="#0e7490" active={mode === 'p'} />
         {P_LINKS.map(([key, label]) => (
           <NavLink key={key} icon={ICONS[key]} label={label} lvl={LVL_OF[key]}
             active={mode === 'p' && principalActive === key} onClick={() => onGo(key)} />

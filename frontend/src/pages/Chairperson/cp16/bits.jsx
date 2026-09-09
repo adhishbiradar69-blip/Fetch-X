@@ -210,29 +210,39 @@ export function OrgTeacherRow({ t, colorOf, onOpen }) {
 }
 
 /* ------------------------------------------------------- bookmark pop --- */
-/* .bm-pop folder popover (designer bmPop) — portaled to document.body */
-export function BmPopover({ pop, newName, onNewName, folders, onToggle, onCreate }) {
+/* .bm-pop folder popover (designer bmPop) — portaled to document.body.
+   v17: kind-aware — 'stu' toggles student ids across student folders,
+   'cls' toggles class ids across class folders (same popover the designer
+   reuses with bmpType='stu'|'cls'). */
+export function BmPopover({ pop, newName, onNewName, folders, onToggle, onCreate, kind = 'stu', classFolders = [] }) {
   if (!pop) return null;
+  const isCls = kind === 'cls';
+  const list = isCls ? classFolders : folders;
+  const idsOf = (f) => (isCls ? f.classIds : f.studentIds);
+  const memberId = isCls ? pop.cls.id : pop.student.id;
+  const title = isCls
+    ? `SAVE CLASS · ${String(pop.cls.name || '').toUpperCase()}`
+    : `SAVE · ${String(pop.student.name || '').toUpperCase()}`;
   return (
     <div className="bm-pop open" style={{ left: pop.left, top: pop.top }} onMouseDown={(e) => e.stopPropagation()}>
-      <div className="bmp-t">SAVE · {String(pop.student.name || '').toUpperCase()}</div>
+      <div className="bmp-t">{title}</div>
       <div>
-        {folders.length ? folders.map((f) => (
+        {list.length ? list.map((f) => (
           <label className="bmopt" key={f.id}>
             <input
               type="checkbox"
-              checked={f.studentIds.includes(pop.student.id)}
-              onChange={() => onToggle(f.id, pop.student.id)}
+              checked={idsOf(f).includes(memberId)}
+              onChange={() => onToggle(f.id, memberId)}
             />
             <i className="bx" />
             <span>{f.name}</span>
-            <em>{f.studentIds.length}</em>
+            <em>{idsOf(f).length}</em>
           </label>
         )) : <div className="bmp-empty">No folders yet — create one below.</div>}
       </div>
       <div className="bmp-new">
         <input
-          placeholder="New folder name"
+          placeholder={isCls ? 'New class folder name' : 'New folder name'}
           value={newName}
           onChange={(e) => onNewName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onCreate(); } }}
@@ -241,6 +251,43 @@ export function BmPopover({ pop, newName, onNewName, folders, onToggle, onCreate
           +
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------- class bookmark strip ---- */
+/* v17 — the CP surfaces classes inside the grade report (section bars).
+   This strip sits under the SECTION COMPARISON chart: one chip per class
+   (avg + student count) with the same .bm save button the student rows
+   use, feeding the shared fx-class-folders store. */
+export function ClassBmStrip({ classes, savedIds, onBookmark, onOpen }) {
+  if (!classes?.length) return null;
+  return (
+    <div className="cmp-chips" style={{ marginTop: 10 }}>
+      {classes.map((c) => (
+        <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span
+            className="classchip"
+            title={`Open class ${c.name || `${c.grade}-${c.section}`} · avg ${pct(c.avg)}%${c.students != null ? ` · ${c.students} students` : ''}`}
+            style={{ cursor: 'pointer' }}
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpen?.(c.id)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onOpen?.(c.id); }}
+          >
+            {c.name || `${c.grade}-${c.section}`} · {pct(c.avg)}%
+          </span>
+          <button
+            type="button"
+            className={`bm${savedIds?.has(c.id) ? ' on' : ''}`}
+            title="Save class to folder"
+            aria-label={`Save class ${c.name || `${c.grade}-${c.section}`} to folder`}
+            onClick={(e) => { e.stopPropagation(); onBookmark?.(e, c); }}
+          >
+            <svg viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" fill="none"><path d="M6 3h12v18l-6-4.5L6 21z" /></svg>
+          </button>
+        </span>
+      ))}
     </div>
   );
 }

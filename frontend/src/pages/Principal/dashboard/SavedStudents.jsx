@@ -2,21 +2,31 @@
    (`fx-folders`), per-folder student cards, remove + open report card.
    Student details are resolved through cached /principal/student-report
    calls so folder cards always show real, live data. */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { fetchStudentReport } from './data';
 import { SectionHead } from './Sections';
-import { initials } from './util';
+import { initials, pct } from './util';
 import ExportCsvButton from '../../../components/v16/ExportCsvButton';
 import { csvStamp } from '../../../lib/csv';
 
 export default function SavedStudents({
   folders, onCreate, onDeleteFolder, onRemoveStudent, onBack, onOpenReport, savedCount,
+  classFolders = [], onCreateClassFolder, onDeleteClassFolder, onRemoveClass, onOpenClass,
+  classesAll = [], backLabel = 'PRINCIPAL DASHBOARD',
 }) {
   const [name, setName] = useState('');
+  const [clsName, setClsName] = useState('');
   const [cache, setCache] = useState({}); // id → {report} | {err}
 
   const allIds = [...new Set(folders.flatMap((f) => f.studentIds))];
+
+  /* v17 saved classes: resolve live class stats from the loaded list */
+  const classById = useMemo(() => new Map((classesAll || []).map((c) => [c.id, c])), [classesAll]);
+  const clsSavedCount = useMemo(
+    () => new Set((classFolders || []).flatMap((f) => f.classIds)).size,
+    [classFolders],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -38,6 +48,10 @@ export default function SavedStudents({
 
   const create = () => {
     if (onCreate(name.trim())) setName('');
+  };
+
+  const createCls = () => {
+    if (onCreateClassFolder?.(clsName.trim())) setClsName('');
   };
 
   /* EXPORT CSV — every bookmarked student with the live report figures the
@@ -65,7 +79,7 @@ export default function SavedStudents({
         <div>
           <button type="button" className="btn-back" onClick={onBack}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
-            PRINCIPAL DASHBOARD
+            {backLabel}
           </button>
           <div className="eyebrow">SCHOOL INTELLIGENCE · SAVED</div>
           <h1>Saved Students</h1>
@@ -163,6 +177,82 @@ export default function SavedStudents({
           );
         })}
       </section>
+
+      {/* v17: SAVED CLASSES — the same folder system for whole classes.
+          Cards resolve live stats from the already-loaded class list, so
+          no extra fetch loop is needed. */}
+      {classFolders != null && (
+        <section className="lvl lvl-3 compact">
+          <SectionHead
+            title="Saved Classes"
+            sub="Bookmark whole classes with the save icon on any class card, then organise them here."
+            tag={`${clsSavedCount} SAVED`}
+          />
+          <div className="fav-head">
+            <input
+              type="text"
+              value={clsName}
+              placeholder="New class folder name — e.g. “Board sections”"
+              autoComplete="off"
+              onChange={(e) => setClsName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); createCls(); } }}
+            />
+            <button type="button" className="btn-back" style={{ marginBottom: 0 }} onClick={createCls}>+ CREATE FOLDER</button>
+          </div>
+
+          {!classFolders.length && (
+            <div className="fav-empty">No class folders yet — create one above, then tap the bookmark icon on any class card.</div>
+          )}
+
+          {classFolders.map((f) => {
+            const cards = f.classIds.map((id) => ({ id, c: classById.get(id) }));
+            return (
+              <div className="fav-folder" key={f.id}>
+                <div className="ff-head">
+                  <h3>{f.name}</h3>
+                  <span className="ff-count">{cards.length}</span>
+                  <button type="button" className="ff-del" title="Delete folder" onClick={() => onDeleteClassFolder?.(f.id)}>
+                    <X size={12} strokeWidth={2.4} />
+                  </button>
+                </div>
+                {cards.length ? (
+                  <div className="ff-grid">
+                    {cards.map(({ id, c }) => (
+                      <div
+                        className="fav-card"
+                        key={id}
+                        role="button"
+                        tabIndex={0}
+                        title={c ? `Open class ${c.name}` : 'Class unavailable'}
+                        onClick={() => onOpenClass?.(id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') onOpenClass?.(id); }}
+                        style={c ? undefined : { opacity: 0.6 }}
+                      >
+                        <span className="avatar">{c ? (c.name || '?').slice(-2) : '—'}</span>
+                        <span className="fi">
+                          <span className="fn">{c ? c.name : `Class ${id}`}</span>
+                          <span className="fc">{c ? `${c.ct_name ? `CT ${c.ct_name} · ` : ''}${c.grade != null ? `Grade ${c.grade}` : 'class'}` : 'not in this school'}</span>
+                        </span>
+                        <span className="fa">{c?.avg != null ? `${pct(c.avg)}%` : '—'}</span>
+                        <button
+                          type="button"
+                          className="fav-x"
+                          title="Remove from folder"
+                          onClick={(e) => { e.stopPropagation(); onRemoveClass?.(f.id, id); }}
+                        >
+                          <X size={12} strokeWidth={2.4} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="fav-empty">Empty — bookmark classes to add them here.</div>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
     </div>
   );
 }

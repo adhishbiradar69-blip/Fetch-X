@@ -50,6 +50,11 @@ export const fetchClassCount = (classId) =>
   api.get('/admin/students', { params: { class_id: classId, page: 1, page_size: 1 } })
     .then((r) => r.data.total);
 
+/* POST /admin/students — {name, class_id, roll_no?, parent_user_id?} →
+   {id, name, class_id}. Verified live (require_school_admin, school-scoped
+   via the class); roll_no is left blank for the admin to assign later. */
+export const createStudent = (body) => api.post('/admin/students', body).then((r) => r.data);
+
 export const updateStudent = (id, body) => api.put(`/admin/students/${id}`, body).then((r) => r.data);
 
 export const deleteStudent = (id) => api.delete(`/admin/students/${id}`).then((r) => r.data);

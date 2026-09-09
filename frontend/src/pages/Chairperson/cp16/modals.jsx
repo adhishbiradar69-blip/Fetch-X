@@ -1,21 +1,30 @@
-/* Fetch-X — v16 Chairperson detail modals (Task 3-a).
+/* Fetch-X — v16/v17 Chairperson detail modals (Task 3-a + v17 delta).
    Ported 1:1 from chairperson.html's openSchoolModal / openGradeModal /
    cmpModal / apModal renders with REAL bundle data:
      • CpSchoolModal  — school report (.report, --lvlD = school color)
-     • CpGradeModal   — grade report (ranks within school + across schools)
-     • CpCompareModal — the designer compare, CP entities: schools + grades
-     • CpAperfModal   — subject radar per term for GROUP / SCHOOL
+     • CpGradeModal   — grade report (ranks within school + across schools);
+                        v17: section bars + chips open the class drill-down
+                        and carry class bookmark buttons
+     • CpCompareModal — the designer compare, CP entities: school / grade /
+                        class / student / folder (class+student+folder
+                        metrics resolve via POST /chairperson/compare)
+     • CpAperfModal   — subject radar per term for GROUP / SCHOOL / GRADE /
+                        CLASS / STUDENT / FOLDER (grade from the bundle's
+                        subject_terms, class from the CP inspect endpoint,
+                        student+folder from /principal/student-report which
+                        admits the chairperson role)
    Charts + util are imported from the Principal dashboard's shared modules
    (never edited). Student reports / teacher reports reuse the Principal
    ReportCardModal / TeacherReportModal (mounted by the page). */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Printer } from 'lucide-react';
 import { BarChart, Donut, LineChart, Radar, useReveal } from '../../Principal/dashboard/charts';
 import { initials, mean, pct } from '../../Principal/dashboard/util';
+import { fetchStudentReport } from '../../Principal/dashboard/data';
 import { printCardEl, printStamp } from '../../Principal/dashboard/printCard';
 import { csvStamp, downloadCsv } from '../../../lib/csv';
-import { CpdSkel, DistroCard, SubjectGridBlock } from './bits';
-import { PERSON_SVG } from './data';
+import { CpdSkel, DistroCard, SubjectGridBlock, ClassBmStrip } from './bits';
+import { cpCompareEntities, fetchCpClassInspect, fetchCpStudents, PERSON_SVG } from './data';
 import { compositeOverall, distroTotal, num, rgbaSoft } from './data';
 
 /* rep-head close button (designer btn-close ✕) */
@@ -192,7 +201,7 @@ export function CpSchoolModal({ school, nSchools, onClose, onOpenGrade }) {
 }
 
 /* =================================================== GRADE REPORT ===== */
-export function CpGradeModal({ school, grade, nSchools, onClose, distroBands, onOpenReport, onBookmark, savedIds }) {
+export function CpGradeModal({ school, grade, nSchools, onClose, distroBands, onOpenReport, onBookmark, savedIds, onOpenClass, clsSavedIds, onClassBookmark }) {
   const [attRange, setAttRange] = useState('3M');
   const reveal = useReveal();
   const S = school;
@@ -204,10 +213,30 @@ export function CpGradeModal({ school, grade, nSchools, onClose, distroBands, on
 
   const secItems = useMemo(
     () => (gr.sections || [])
-      .map((c) => ({ label: c.section, tip: `Section ${c.section} · avg ${pct(c.avg)}% · Grade ${gr.grade}`, val: pct(c.avg) }))
+      .map((c) => ({
+        label: c.section,
+        tip: `Section ${c.section} · avg ${pct(c.avg)}% · Grade ${gr.grade}${c.id != null ? ' — click to open the class report' : ''}`,
+        val: pct(c.avg),
+        id: c.id,
+      }))
       .sort((a, b) => b.val - a.val || a.label.localeCompare(b.label)),
     [gr],
   );
+  /* v17 — class rows for the bookmark strip / drill-down (stale bundles
+     without section ids degrade honestly: no strip, bars not clickable) */
+  const secClasses = useMemo(
+    () => secItems
+      .filter((c) => c.id != null)
+      .map((c) => ({
+        id: c.id,
+        name: `${gr.grade}-${c.label}`,
+        grade: gr.grade,
+        section: c.label,
+        avg: c.val,
+      })),
+    [secItems, gr.grade],
+  );
+  const secClickable = secClasses.length > 0;
 
   return (
     <div
@@ -274,9 +303,20 @@ export function CpGradeModal({ school, grade, nSchools, onClose, distroBands, on
         </div>
 
         <div className="card chart-card fade">
-          <div className="chead"><span className="label">SECTION COMPARISON · {nSections} SECTIONS · ALL-TERM AVG</span></div>
+          <div className="chead"><span className="label">SECTION COMPARISON · {nSections} SECTIONS · ALL-TERM AVG{secClickable ? ' · CLICK A BAR FOR THE CLASS REPORT' : ''}</span></div>
           <div className="cbody">
-            <BarChart items={secItems} />
+            <BarChart
+              items={secItems}
+              onClick={secClickable ? (i) => { const c = secItems[i]; if (c?.id != null) onOpenClass?.(c.id); } : undefined}
+            />
+            {secClickable && (
+              <ClassBmStrip
+                classes={secClasses}
+                savedIds={clsSavedIds}
+                onBookmark={onClassBookmark}
+                onOpen={onOpenClass}
+              />
+            )}
           </div>
         </div>
 
@@ -346,13 +386,21 @@ export function GradeStudentRow({ s, rank, reveal, onOpen, onBookmark, saved }) 
 const CMP_MAX = 7;
 const CMP_COLORS = ['#4f42dd', '#0c7a6b', '#b45f04', '#c2255c', '#0e7490', '#9333ea', '#d97706'];
 
-export function CpCompareModal({ bundle, onClose }) {
+export function CpCompareModal({ bundle, onClose, classesAll = [], folders = [] }) {
   const reveal = useReveal();
   const cmpRef = useRef(null);
   const [printBusy, setPrintBusy] = useState(false);
+  /* designer seg: SCHOOL / GRADE / CLASS / STUDENT / FOLDER (v17 adds the
+     last three — class+student+folder metrics resolve via the CP compare
+     endpoint; schools+grades stay client-side over the loaded bundle) */
   const [type, setType] = useState('school');
   const [needle, setNeedle] = useState('');
   const [selV, setSelV] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState('');
+  /* student options come from the CP org-rank endpoint (server search) */
+  const [stuOpts, setStuOpts] = useState([]);
+  const [stuLoading, setStuLoading] = useState(false);
   /* pre-seeded with all three branches (designer openCompareFor('school')) */
   const [ents, setEnts] = useState(() => (bundle.schools || []).slice(0, 3).map((S, i) => ({
     key: `school|${S.id}`,
@@ -372,13 +420,44 @@ export function CpCompareModal({ bundle, onClose }) {
         label: `${S.name} — ${compositeOverall(S.marks, S.tasks, S.attendance)}%`,
       }));
     }
+    if (type === 'class') {
+      return classesAll.map((c) => ({
+        v: `class|${c.id}`,
+        label: `${c.schoolName} · ${c.name} — ${pct(c.avg)}%`,
+      }));
+    }
+    if (type === 'folder') {
+      return folders.length
+        ? folders.map((f) => ({ v: `folder|${f.id}`, label: `${f.name} — ${f.studentIds.length} saved` }))
+        : [{ v: '', label: 'No folders yet' }];
+    }
+    if (type === 'student') {
+      return stuOpts.map((s) => ({
+        v: `student|${s.id}`,
+        label: `#${s.org_rank} · ${s.name} (${s.school} ${s.class})`,
+      }));
+    }
     const grades = [...new Set((bundle.schools || []).flatMap((S) => (S.grades || []).map((g) => g.grade)))]
       .sort((a, b) => a - b);
     return grades.map((g) => {
       const e = gradeEntityOf(bundle, g);
       return { v: `grade|${g}`, label: `Grade ${g} — group average · ${e.marks}%` };
     });
-  }, [type, bundle]);
+  }, [type, bundle, classesAll, folders, stuOpts]);
+
+  /* students are server-searched (the org list is paginated, so a client
+     filter over the bundle would lie); debounce matches GlobalSearch */
+  useEffect(() => {
+    if (type !== 'student') return undefined;
+    let alive = true;
+    const t = setTimeout(() => {
+      setStuLoading(true);
+      fetchCpStudents({ search: needle.trim(), page: 1, pageSize: 30 })
+        .then((d) => { if (alive) { setStuOpts(d.students); setStuLoading(false); } })
+        .catch(() => { if (alive) { setStuOpts([]); setStuLoading(false); } });
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [type, needle]);
 
   const visibleOptions = options.filter(
     (o) => !needle.trim() || o.label.toLowerCase().includes(needle.trim().toLowerCase()),
@@ -387,8 +466,25 @@ export function CpCompareModal({ bundle, onClose }) {
     ? selV
     : visibleOptions[0]?.v || '';
 
-  const addEntity = () => {
+  /* backend-resolved entity → the modal's {att, task, marks} shape */
+  const pushRemote = (entity, key, fallbackName) => {
+    if (!entity) return false;
+    setEnts((p) => [...p, {
+      key,
+      type: entity.type || type,
+      id: entity.id ?? '',
+      name: entity.name || fallbackName,
+      att: Math.round(Number(entity.attendance) || 0),
+      task: Math.round(Number(entity.tasks) || 0),
+      marks: Math.round(Number(entity.marks) || 0),
+      color: CMP_COLORS[p.length % CMP_COLORS.length],
+    }]);
+    return true;
+  };
+
+  const addEntity = async () => {
     if (!selValue || ents.length >= CMP_MAX || ents.some((e) => e.key === selValue)) return;
+    setAddError('');
     if (selValue.startsWith('school|')) {
       const S = (bundle.schools || []).find((x) => `school|${x.id}` === selValue);
       if (!S) return;
@@ -397,10 +493,42 @@ export function CpCompareModal({ bundle, onClose }) {
         att: pct(S.attendance), task: pct(S.tasks), marks: pct(S.marks),
         color: CMP_COLORS[p.length % CMP_COLORS.length],
       }]);
-    } else {
+    } else if (selValue.startsWith('grade|')) {
       const e = gradeEntityOf(bundle, Number(selValue.slice(6)));
       if (!e) return;
       setEnts((p) => [...p, { ...e, color: CMP_COLORS[p.length % CMP_COLORS.length] }]);
+    } else {
+      setAddBusy(true);
+      try {
+        let payload = null;
+        if (selValue.startsWith('class|')) {
+          const c = classesAll.find((x) => `class|${x.id}` === selValue);
+          if (c) {
+            payload = [{ type: 'class', id: String(c.id), name: `${c.schoolName} · ${c.name}` }];
+          }
+        } else if (selValue.startsWith('student|')) {
+          const s = stuOpts.find((x) => `student|${x.id}` === selValue);
+          if (s) payload = [{ type: 'student', id: String(s.id), name: s.name }];
+        } else if (selValue.startsWith('folder|')) {
+          const f = folders.find((x) => `folder|${x.id}` === selValue);
+          if (f) {
+            payload = [{ type: 'folder', id: f.id, name: f.name, student_ids: f.studentIds }];
+          }
+        }
+        if (!payload) {
+          setAddError('That entity is no longer available — refresh and try again.');
+          return;
+        }
+        const res = await cpCompareEntities(payload);
+        const ent = (res.entities || [])[0];
+        if (!ent || !pushRemote(ent, selValue, payload[0].name)) {
+          setAddError('The compare service returned no data for that entity.');
+        }
+      } catch {
+        setAddError('The compare service could not be reached — try again.');
+      } finally {
+        setAddBusy(false);
+      }
     }
   };
 
@@ -472,11 +600,16 @@ export function CpCompareModal({ bundle, onClose }) {
         <div className="card cmp-picker">
           <div className="cmp-row">
             <div className="seg">
-              <button type="button" className={`gtab${type === 'school' ? ' active' : ''}`} onClick={() => setType('school')}>SCHOOLS</button>
-              <button type="button" className={`gtab${type === 'grade' ? ' active' : ''}`} onClick={() => setType('grade')}>GRADES</button>
+              <button type="button" className={`gtab${type === 'school' ? ' active' : ''}`} onClick={() => { setType('school'); setSelV(''); setNeedle(''); }}>SCHOOL</button>
+              <button type="button" className={`gtab${type === 'grade' ? ' active' : ''}`} onClick={() => { setType('grade'); setSelV(''); setNeedle(''); }}>GRADE</button>
+              <button type="button" className={`gtab${type === 'class' ? ' active' : ''}`} onClick={() => { setType('class'); setSelV(''); setNeedle(''); }}>CLASS</button>
+              <button type="button" className={`gtab${type === 'student' ? ' active' : ''}`} onClick={() => { setType('student'); setSelV(''); setNeedle(''); }}>STUDENT</button>
+              <button type="button" className={`gtab${type === 'folder' ? ' active' : ''}`} onClick={() => { setType('folder'); setSelV(''); setNeedle(''); }}>FOLDER</button>
             </div>
             <select value={selValue} aria-label="Entity to add" onChange={(e) => setSelV(e.target.value)}>
-              {visibleOptions.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+              {visibleOptions.length
+                ? visibleOptions.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)
+                : <option value="">{type === 'student' ? (stuLoading ? 'Searching…' : 'No students match') : 'No matches'}</option>}
             </select>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -484,13 +617,22 @@ export function CpCompareModal({ bundle, onClose }) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
               <input
                 value={needle}
-                placeholder="Search the list — e.g. “Greenwood”"
+                placeholder={type === 'student' ? 'Search students — e.g. “Ananya”' : 'Search the list — e.g. “Mailoor”'}
                 autoComplete="off"
                 onChange={(e) => setNeedle(e.target.value)}
               />
             </div>
-            <button type="button" className="ct-btn solid" disabled={rows.length >= CMP_MAX} onClick={addEntity}>+ ADD ENTITY</button>
+            <button
+              type="button" className="ct-btn solid"
+              disabled={rows.length >= CMP_MAX || addBusy || (type === 'folder' && !folders.length)}
+              onClick={addEntity}
+            >
+              {addBusy ? 'ADDING…' : '+ ADD ENTITY'}
+            </button>
           </div>
+          {addError && (
+            <div style={{ fontSize: 9.5, fontWeight: 700, color: '#dc2626', padding: '6px 2px 0' }}>{addError}</div>
+          )}
           <div className="cmp-chips">
             {rows.length ? rows.map((e, i) => (
               <button key={e.key} type="button" className="cmp-chip" style={{ background: e.color, color: '#fff' }} title={`Remove ${e.name}`} onClick={() => removeAt(i)}>
@@ -561,10 +703,32 @@ export function CpCompareModal({ bundle, onClose }) {
 }
 
 /* ========================================== ACADEMIC PERFORMANCE ===== */
-export function CpAperfModal({ bundle, onClose }) {
+/* v17 scopes — every one honestly reachable from the CP surface:
+     GROUP   bundle (mean across schools)      SCHOOL  bundle subjects
+     GRADE   bundle grade rows' subject_terms  (v17 additive key)
+     CLASS   GET /chairperson/classes/{id}/inspect
+     STUDENT GET /principal/student-report/{id} (object-level guard admits
+             the chairperson role — the same endpoint ReportCardModal uses)
+     FOLDER  mean over each member's student report (same endpoint)
+   Each scope states where its numbers come from; failures render honest
+   error notes instead of fake radars. */
+const AP_SCOPES = ['group', 'school', 'grade', 'class', 'student', 'folder'];
+
+export function CpAperfModal({ bundle, onClose, classesAll = [], folders = [] }) {
+  /* stable identity (bundle.schools || [] allocates per render, which the
+     hook deps lint rightly warns would churn every memo below) */
+  const schools = useMemo(() => bundle.schools || [], [bundle.schools]);
   const [type, setType] = useState('group');
-  const schools = bundle.schools || [];
   const [schoolId, setSchoolId] = useState(String(schools[0]?.id ?? ''));
+  const [classId, setClassId] = useState('');
+  const [stuSel, setStuSel] = useState('');
+  const [folderId, setFolderId] = useState('');
+  const [needle, setNeedle] = useState('');
+  /* server-searched student options (org list is paginated) */
+  const [stuOpts, setStuOpts] = useState([]);
+  /* async scopes (class/student/folder) resolve in an effect */
+  const [data, setData] = useState(null); // { name, sub, rows, empty, err }
+  const [busy, setBusy] = useState(false);
 
   /* subject labels = first-seen union across schools (seed: same set) */
   const labels = useMemo(() => {
@@ -575,33 +739,237 @@ export function CpAperfModal({ bundle, onClose }) {
     return out;
   }, [schools]);
 
-  const data = useMemo(() => {
+  const grades = useMemo(
+    () => [...new Set((schools).flatMap((S) => (S.grades || []).map((g) => g.grade)))].sort((a, b) => a - b),
+    [schools],
+  );
+
+  /* students are server-searched (same debounce as the compare sheet) */
+  useEffect(() => {
+    if (type !== 'student') return undefined;
+    let alive = true;
+    const t = setTimeout(() => {
+      fetchCpStudents({ search: needle.trim(), page: 1, pageSize: 30 })
+        .then((d) => { if (alive) setStuOpts(d.students); })
+        .catch(() => { if (alive) setStuOpts([]); });
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [type, needle]);
+
+  /* the class picker's options (bundle-derived, needle-filtered) */
+  const classOpts = useMemo(
+    () => classesAll
+      .filter((c) => !needle.trim()
+        || `${c.schoolName} · ${c.name}`.toLowerCase().includes(needle.trim().toLowerCase())),
+    [classesAll, needle],
+  );
+
+  /* sync pickers when the type switches (first entry wins, like the
+     designer); the school/grade scopes share the schoolId state but carry
+     different id spaces, so each switch revalidates it.
+     Render-phase state adjustment (react.dev: adjusting state when a
+     prop/state changes) — the old effect reseed ran after paint and the
+     lint rule rightly flags sync setState in effect bodies. */
+  const [prevType, setPrevType] = useState(type);
+  if (prevType !== type) {
+    setPrevType(type);
+    setNeedle('');
+    if (type === 'school') setSchoolId((v) => (schools.some((S) => String(S.id) === v) ? v : String(schools[0]?.id ?? '')));
+    if (type === 'grade') setSchoolId((v) => (grades.some((g) => String(g) === v) ? v : String(grades[0] ?? '')));
+    if (type === 'class') setClassId((v) => (classesAll.some((c) => String(c.id) === v) ? v : String(classesAll[0]?.id ?? '')));
+    if (type === 'folder') setFolderId((v) => (folders.some((f) => String(f.id) === v) ? v : String(folders[0]?.id ?? '')));
+    if (type === 'student') setStuSel('');
+  }
+
+  /* GROUP / SCHOOL / GRADE resolve synchronously from the bundle; CLASS /
+     STUDENT / FOLDER fetch. Every setState lives inside run() (nothing
+     direct in the effect body), so scopes swap without cascading renders. */
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+    if (type === 'group') {
+      const rows = labels.map((name) => {
+        const per = schools.map((S) => (S.subjects || []).find((s) => s.name === name)).filter(Boolean);
+        return {
+          name,
+          t: [0, 1, 2].map((k) => Math.round(mean(per.map((s) => s.t?.[k] ?? 0)))),
+          avg: Math.round(mean(per.map((s) => s.avg ?? 0))),
+        };
+      });
+      setData({
+        name: 'Entire Group',
+        sub: `${schools.length} schools · ${num(bundle.group?.students)} students · averaged subject results`,
+        rows,
+      });
+      return undefined;
+    }
     if (type === 'school') {
       const S = schools.find((x) => String(x.id) === schoolId) || schools[0];
-      if (!S) return { name: '—', sub: '—', rows: [] };
-      return {
+      if (!S) { setData({ name: '—', sub: '—', rows: [] }); return undefined; }
+      setData({
         name: S.name,
         sub: `${S.principal || 'Principal'} · ${(S.grades || []).reduce((n, g) => n + (g.sections?.length || 0), 0)} classes · ${num(S.students)} students`,
         rows: (S.subjects || []).map((s) => ({ name: s.name, t: s.t, avg: s.avg })),
-      };
+      });
+      return undefined;
     }
-    /* group: mean across schools per subject per term */
-    const rows = labels.map((name) => {
-      const per = schools.map((S) => (S.subjects || []).find((s) => s.name === name)).filter(Boolean);
-      return {
-        name,
-        t: [0, 1, 2].map((k) => Math.round(mean(per.map((s) => s.t?.[k] ?? 0)))),
-        avg: Math.round(mean(per.map((s) => s.avg ?? 0))),
-      };
-    });
-    return {
-      name: 'Entire Group',
-      sub: `${schools.length} schools · ${num(bundle.group?.students)} students · averaged subject results`,
-      rows,
+    if (type === 'grade') {
+      /* grade rows across every school for the chosen grade number
+         (schoolId doubles as the grade number in this scope) */
+      const g = Number(schoolId);
+      const entries = schools
+        .map((S) => (S.grades || []).find((x) => x.grade === g))
+        .filter((x) => x && Array.isArray(x.subject_terms));
+      if (!entries.length) {
+        setData({
+          name: `Grade ${g} · group`, sub: 'grade subject data',
+          rows: [], empty: true,
+          err: 'Grade subject data is not in the loaded group bundle yet — reload the page after the backend seeds it.',
+        });
+        return undefined;
+      }
+      /* union of subject names, mean per name per term across schools */
+      const names = [];
+      entries.forEach((e) => (e.subject_terms || []).forEach((s) => {
+        if (!names.includes(s.name)) names.push(s.name);
+      }));
+      const rows = names.map((name) => {
+        const per = entries.map((e) => (e.subject_terms || []).find((s) => s.name === name)).filter(Boolean);
+        return {
+          name,
+          t: [0, 1, 2].map((k) => Math.round(mean(per.map((s) => s.t?.[k] ?? 0)))),
+          avg: Math.round(mean(per.flatMap((s) => s.t.filter(Number.isFinite)))),
+        };
+      });
+      setData({
+        name: `Grade ${g} · group`,
+        sub: `mean of ${entries.length} school grade rows · subject marks per term`,
+        rows,
+      });
+      return undefined;
+    }
+    /* class / student / folder — async scopes */
+    setBusy(true);
+    setData(null);
+    try {
+      if (type === 'class') {
+        if (!classId) { if (alive) setData({ name: '—', sub: '—', rows: [], empty: true }); return; }
+        const d = await fetchCpClassInspect(classId);
+        if (!alive) return;
+        setData({
+          name: `${d.school?.name ? `${d.school.name} · ` : ''}Class ${d.info?.name ?? ''}`,
+          sub: `${d.info?.students ?? '—'} students · class teacher ${d.info?.ct_name || '—'} · subject marks per term`,
+          rows: (d.subjects || []).map((s) => ({ name: s.name, t: [s.t1, s.t2, s.t3], avg: s.avg })),
+        });
+      } else if (type === 'student') {
+        if (!stuSel) { if (alive) setData({ name: '—', sub: '—', rows: [], empty: true }); return; }
+        const r = await fetchStudentReport(Number(stuSel));
+        if (!alive) return;
+        setData({
+          name: r.student?.name || `Student ${stuSel}`,
+          sub: `${r.student?.class_name || '—'} · group rank view via report card · subject marks per term`,
+          rows: (r.subjects || []).map((s) => ({
+            name: s.name,
+            t: [s.marks?.t1, s.marks?.t2, s.marks?.t3],
+            avg: s.marksAvg,
+          })),
+        });
+      } else if (type === 'folder') {
+        const f = folders.find((x) => String(x.id) === folderId);
+        if (!f || !f.studentIds.length) {
+          if (alive) setData({
+            name: f ? f.name : 'No folder', sub: 'folder scope',
+            rows: [], empty: true,
+            err: f ? 'This folder is empty — bookmark students first.' : 'No folders yet — save students to compare them here.',
+          });
+          return;
+        }
+        const reports = (await Promise.all(
+          f.studentIds.map((sid) => fetchStudentReport(sid).catch(() => null)),
+        )).filter(Boolean);
+        if (!alive) return;
+        if (!reports.length) {
+          setData({
+            name: f.name, sub: 'folder scope', rows: [], empty: true,
+            err: 'None of this folder’s reports could be loaded — try again.',
+          });
+          return;
+        }
+        /* union of subject names across members (folders may span
+           schools), mean per name per term over the reports that have it */
+        const names = [];
+        reports.forEach((r) => (r.subjects || []).forEach((s) => {
+          if (!names.includes(s.name)) names.push(s.name);
+        }));
+        const rows = names.map((name) => {
+          const per = reports
+            .map((r) => (r.subjects || []).find((s) => s.name === name))
+            .filter(Boolean);
+          return {
+            name,
+            t: [0, 1, 2].map((k) => Math.round(mean(per.map((s) => s.marks?.[`t${k + 1}`] ?? 0)))),
+            avg: Math.round(mean(per.map((s) => s.avg ?? 0))),
+          };
+        });
+        setData({
+          name: f.name,
+          sub: `average of ${reports.length}/${f.studentIds.length} saved students · subject marks per term`,
+          rows,
+        });
+      }
+    } catch {
+      if (alive) setData({ name: '—', sub: '—', rows: [], empty: true, err: 'This entity’s report could not be loaded — try again.' });
+    } finally {
+      if (alive) setBusy(false);
+    }
     };
-  }, [type, schoolId, schools, labels, bundle.group?.students]);
+    run();
+    return () => { alive = false; };
+  }, [type, schoolId, classId, stuSel, folderId, labels, schools, bundle.group?.students, folders]);
 
-  const allVals = data.rows.flatMap((d) => d.t);
+  const allVals = data ? data.rows.flatMap((d) => d.t) : [];
+  const showPicker = type !== 'group';
+
+  /* per-type option list for the picker (needle-filtered client-side;
+     students come pre-searched from the server) */
+  const pickerOptions = useMemo(() => {
+    if (type === 'school') {
+      return schools.map((S) => ({
+        v: String(S.id),
+        label: `${S.name} — ${compositeOverall(S.marks, S.tasks, S.attendance)}%`,
+      }));
+    }
+    if (type === 'grade') {
+      return grades.map((g) => ({ v: String(g), label: `Grade ${g} — group average` }));
+    }
+    if (type === 'class') {
+      return classOpts.map((c) => ({ v: String(c.id), label: `${c.schoolName} · ${c.name} — ${pct(c.avg)}%` }));
+    }
+    if (type === 'folder') {
+      return folders.length
+        ? folders.map((f) => ({ v: String(f.id), label: `${f.name} — ${f.studentIds.length} saved` }))
+        : [{ v: '', label: 'No folders yet' }];
+    }
+    if (type === 'student') {
+      return stuOpts.map((s) => ({ v: String(s.id), label: `#${s.org_rank} · ${s.name} (${s.school} ${s.class})` }));
+    }
+    return [];
+  }, [type, schools, grades, classOpts, folders, stuOpts]);
+
+  const pickerValue = String(
+    type === 'school' ? schoolId
+      : type === 'grade' ? schoolId
+        : type === 'class' ? classId
+          : type === 'student' ? stuSel
+            : folderId,
+  );
+  const onPicker = (v) => {
+    if (type === 'school') setSchoolId(v);
+    else if (type === 'grade') setSchoolId(v);
+    else if (type === 'class') setClassId(v);
+    else if (type === 'student') setStuSel(v);
+    else setFolderId(v);
+  };
 
   return (
     <div
@@ -620,32 +988,56 @@ export function CpAperfModal({ bundle, onClose }) {
 
         <div className="ap-pick">
           <div className="seg">
-            <button type="button" className={`gtab${type === 'group' ? ' active' : ''}`} onClick={() => setType('group')}>GROUP</button>
-            <button type="button" className={`gtab${type === 'school' ? ' active' : ''}`} onClick={() => setType('school')}>SCHOOL</button>
-          </div>
-          <select
-            value={schoolId}
-            aria-label="School"
-            disabled={type === 'group'}
-            onChange={(e) => setSchoolId(e.target.value)}
-          >
-            {schools.map((S) => (
-              <option key={S.id} value={String(S.id)}>{S.name} — {compositeOverall(S.marks, S.tasks, S.attendance)}%</option>
+            {AP_SCOPES.map((t) => (
+              <button
+                key={t} type="button"
+                className={`gtab${type === t ? ' active' : ''}`}
+                onClick={() => setType(t)}
+              >
+                {t.toUpperCase()}
+              </button>
             ))}
+          </div>
+          {showPicker && (
+            <div className="msearch">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+              <input
+                value={needle}
+                placeholder={type === 'student' ? 'Search — e.g. “Ishaan”' : 'Search — e.g. “8-Emerald”'}
+                autoComplete="off"
+                onChange={(e) => setNeedle(e.target.value)}
+              />
+            </div>
+          )}
+          <select
+            value={pickerValue}
+            aria-label="Entity"
+            disabled={type === 'group' || (type === 'student' && !stuOpts.length)}
+            onChange={(e) => onPicker(e.target.value)}
+          >
+            {type === 'group' && <option value="">Entire Group</option>}
+            {type !== 'group' && (pickerOptions.length
+              ? pickerOptions.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)
+              : <option value="">{type === 'student' ? 'No students match' : 'No matches'}</option>)}
           </select>
         </div>
 
         <div className="card ap-ent">
           <span className="ap-badge">◈</span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)' }}>{data.name}</div>
-            <div style={{ fontSize: 8.5, fontWeight: 700, color: 'var(--muted)', marginTop: 2 }}>{data.sub}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)' }}>{data?.name ?? '—'}</div>
+            <div style={{ fontSize: 8.5, fontWeight: 700, color: 'var(--muted)', marginTop: 2 }}>{data?.sub ?? '—'}</div>
           </div>
         </div>
 
-        {!data.rows.length ? (
+        {busy && <CpdSkel h={180} style={{ marginTop: 16 }} />}
+        {!busy && data?.err && (
+          <div className="pd-note" style={{ marginTop: 16 }}>{data.err}</div>
+        )}
+        {!busy && !data?.err && !data?.rows.length && (
           <CpdSkel h={180} style={{ marginTop: 16 }} />
-        ) : (
+        )}
+        {!busy && !data?.err && !!data?.rows.length && (
           <div className="ap-grid">
             {[0, 1, 2].map((k) => {
               const vals = data.rows.map((d) => d.t[k]);
@@ -661,8 +1053,8 @@ export function CpAperfModal({ bundle, onClose }) {
         )}
 
         <div className="ap-note">
-          <b style={{ color: '#4f42dd' }}>{data.name}</b> · all-year subject average{' '}
-          <b style={{ color: '#4f42dd' }}>{Math.round(mean(allVals))}%</b> · hover the dots for exact scores
+          <b style={{ color: '#4f42dd' }}>{data?.name ?? '—'}</b> · all-year subject average{' '}
+          <b style={{ color: '#4f42dd' }}>{allVals.length ? `${Math.round(mean(allVals))}%` : '—'}</b> · hover the dots for exact scores
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@ import { Radar } from './charts';
 import { mean, pct } from './util';
 
 const SCOPES = [
+  ['group', 'GROUP'],
   ['school', 'SCHOOL'],
   ['grade', 'GRADE'],
   ['class', 'CLASS'],
@@ -27,11 +28,12 @@ export default function AcademicModal({ onClose, classesAll = [], folders = [] }
   const [err, setErr] = useState(false);
   const closeRef = useRef(null);
 
-  /* key of the entity whose radar is requested — folders depend on their members */
+  /* key of the entity whose radar is requested — folders depend on their members.
+     GROUP normalizes to school: for the principal the group is this one school. */
   const entKey = useMemo(() => JSON.stringify([
-    type,
+    type === 'group' ? 'school' : type,
     id,
-    type === 'folder' ? (folders.find((f) => String(f.id) === String(id))?.studentIds || []) : 0,
+    (type === 'folder') ? (folders.find((f) => String(f.id) === String(id))?.studentIds || []) : 0,
   ]), [type, id, folders]);
   /* busy is derived: true until data for the CURRENT selection has landed */
   const busy = dataKey !== entKey;
@@ -52,7 +54,7 @@ export default function AcademicModal({ onClose, classesAll = [], folders = [] }
   );
 
   const optionsFor = () => {
-    if (type === 'school') return [{ value: 'school', label: 'Entire School' }];
+    if (type === 'school' || type === 'group') return [{ value: 'school', label: 'Entire School' }];
     if (type === 'grade') return grades.map((g) => ({ value: String(g), label: `Grade ${g}` }));
     if (type === 'class') return classesAll.map((c) => ({ value: String(c.id), label: `${c.name} — ${pct(c.avg)}%` }));
     if (type === 'folder') {
@@ -67,7 +69,7 @@ export default function AcademicModal({ onClose, classesAll = [], folders = [] }
   };
 
   const firstIdFor = (t) => {
-    if (t === 'school') return 'school';
+    if (t === 'school' || t === 'group') return 'school';
     if (t === 'grade') return grades.length ? String(grades[grades.length - 1]) : '';
     if (t === 'class') return classesAll.length ? String(classesAll[0].id) : '';
     if (t === 'folder') return folders.length ? String(folders[0].id) : '';
@@ -76,7 +78,9 @@ export default function AcademicModal({ onClose, classesAll = [], folders = [] }
 
   /* entity header info */
   let entName = 'Entire School';
-  let entSub = `${classesAll.length} classes · averaged subject results`;
+  let entSub = type === 'group'
+    ? `${classesAll.length} classes · the group is this one school`
+    : `${classesAll.length} classes · averaged subject results`;
   if (type === 'grade') {
     entName = `Grade ${id}`;
     entSub = 'average of all sections in this grade';
@@ -122,7 +126,7 @@ export default function AcademicModal({ onClose, classesAll = [], folders = [] }
             });
             apply({ subjects: names, terms });
           }
-        } else if (type === 'school') {
+        } else if (type === 'school' || type === 'group') {
           apply(await fetchRadar({ scope: 'school' }));
         } else if (type === 'grade') {
           apply(await fetchRadar({ scope: 'grade', grade: id }));

@@ -28,13 +28,25 @@
    A failed probe just drops the context segment; the group stays and the
    embedded component's own empty/error state shows (graceful degrade).
 
+   Dev-level chrome (task 2-e): ONE PageHead above the stage — eyebrow
+   "Fetch-X · Developer Console", the active tier's title/subtitle and its
+   tier-* tint class (designer TIER_META). The subtitle shows LIVE group
+   counts from GET /group/summary (super_admin-gated) as "OVERSIGHT ·
+   N SCHOOLS · N CLASSES · N STUDENTS · N TEACHERS"; until it lands (or if
+   it fails) the tier keeps its TIER_META subtitle minus the designer's
+   hardcoded counts — no fake numbers. The per-tier TIER BAND headers are
+   NOT duplicated here: every embedded component already renders its own
+   band + pagehead inside its mounted chrome.
+
    Escape is left to the embedded components (modals/drawers handle it);
    sign-out goes through useAuth().logout → "/". */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DashSidebar from '../Principal/dashboard/DashSidebar';
 import { fetchCtMe, fetchSchoolOverview } from '../Principal/dashboard/data';
+import { PageHead } from '../../components/v16/Shell';
 import { useAuth } from '../../auth/AuthContext';
+import api from '../../api/client';
 import AdminConsole from '../Admin/AdminConsole';
 import ChairpersonDashboard from '../Chairperson/ChairpersonDashboard';
 import PrincipalDashboard from '../Principal/Dashboard';
@@ -43,10 +55,13 @@ import '../Principal/dashboard/v16.css';
 
 /* designer developer.html: tier order, dot colors, default section and the
    link stack per group (dashes: label texts match the embedded sidebars so
-   the link-drive can find them). */
+   the link-drive can find them). `sub` is the pagehead fallback subtitle
+   (designer TIER_META.sub, with its hardcoded counts/campus names dropped
+   — the live counts come from /group/summary). */
 const TIERS = [
   {
     key: 'ad', dot: '#c2255c', base: 'ADMIN', title: 'Admin Dashboard',
+    sub: 'Admin · Data management — students, staff, and classes',
     links: [
       ['adDash', 'Admin Dashboard', 1],
       ['adClasses', 'Classes', 3],
@@ -56,6 +71,7 @@ const TIERS = [
   },
   {
     key: 'cp', dot: '#4f42dd', base: 'CHAIRPERSON', title: 'Chairperson Dashboard',
+    sub: 'Chairperson · Group-wide academic intelligence across every school',
     links: [
       ['cpGroup', 'Group Level', 1],
       ['cpSchools', 'Schools Level', 2],
@@ -66,6 +82,7 @@ const TIERS = [
   },
   {
     key: 'pr', dot: '#0e7490', base: 'PRINCIPAL', title: 'Principal Dashboard',
+    sub: 'Principal · School-wide academic intelligence',
     links: [
       ['schoolSec', 'School Level', 1],
       ['subjectSec', 'Subject Level', 2],
@@ -76,6 +93,7 @@ const TIERS = [
   },
   {
     key: 'ct', dot: '#b45f04', base: 'CLASS TEACHER', title: 'Class Teacher Dashboard',
+    sub: 'Class Teacher · Classroom intelligence',
     links: [
       ['ctHome', 'My Class', 3],
       ['ctAtt', 'Attendance', 2],
@@ -102,6 +120,7 @@ export default function DevConsole() {
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [school, setSchool] = useState(null);   // super_admin's first school
   const [ctClass, setCtClass] = useState(null); // super_admin's first CT post
+  const [summary, setSummary] = useState(null); // /group/summary live counts
   const stageRef = useRef(null);
   const wrapRefs = useRef({});                  // tier key → wrapper element
 
@@ -114,6 +133,16 @@ export default function DevConsole() {
     fetchCtMe()
       .then((me) => { if (alive) setCtClass(me?.class?.name || null); })
       .catch(() => { /* no CT capacity — component shows its own state */ });
+    return () => { alive = false; };
+  }, []);
+
+  /* dev pagehead live counts (task 2-e): until /group/summary lands (or if
+     it fails) the subtitle stays the tier's own TIER_META copy — honest. */
+  useEffect(() => {
+    let alive = true;
+    api.get('/group/summary')
+      .then((r) => { if (alive) setSummary(r.data || null); })
+      .catch(() => { /* subtitle falls back to the tier's own copy */ });
     return () => { alive = false; };
   }, []);
 
@@ -153,6 +182,16 @@ export default function DevConsole() {
     driveTier(meta.key, linkKey);
   };
 
+  /* pagehead (designer TIER_META): title + tier-* tint class swap per tier;
+     the subtitle prefers the live OVERSIGHT line, then the tier's own copy
+     (ct names the real CT post when the probe found one). */
+  const meta = tierMeta(tier);
+  const oversight = summary
+    ? `OVERSIGHT · ${summary.schools} SCHOOLS · ${summary.classes} CLASSES · ${summary.students} STUDENTS · ${summary.teachers} TEACHERS`
+    : null;
+  const sub = oversight
+    || (tier === 'ct' && ctClass ? `${meta.sub} for ${ctClass}` : meta.sub);
+
   /* designer group labels: "ADMIN · MAILLOOR" / "CHAIRPERSON" /
      "PRINCIPAL · MAILLOOR" / "CLASS TEACHER · 10-EMERALD" — here with the
      real signed-in context (full school name, uppercased) */
@@ -184,8 +223,15 @@ export default function DevConsole() {
       />
 
       <div className="dev-stage" ref={stageRef}>
+        <PageHead
+          tier={tier}
+          eyebrow="Fetch-X · Developer Console"
+          title={meta.title}
+          subtitle={sub}
+        />
+
         <p className="sr-only" aria-live="polite">
-          {`${tierMeta(tier)?.title || 'Dashboard'} shown — switch tiers from the sidebar group labels`}
+          {`${meta.title} shown — switch tiers from the sidebar group labels`}
         </p>
 
         {TIERS.map((t) => (

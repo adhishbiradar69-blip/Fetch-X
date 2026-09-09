@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import engine, Base, SessionLocal, ensure_unique_indexes
 from app.models import user, user_school, school, class_, student, attendance, task, mark, subject, grade_subject, exam, teacher_assignment
 from app.models.school import School
-from app.routers import auth, admin, attendance, tasks, academics, principal, chairperson, parent, timetable, ct, vp
+from app.routers import auth, admin, attendance, tasks, academics, principal, chairperson, parent, timetable, ct, vp, developer
 from app.rate_limit import limiter
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -124,6 +124,7 @@ app.include_router(parent.router)
 app.include_router(timetable.router)
 app.include_router(ct.router)
 app.include_router(vp.router)
+app.include_router(developer.router)
 
 
 # Warm the chairperson's multi-school aggregation cache in the background so

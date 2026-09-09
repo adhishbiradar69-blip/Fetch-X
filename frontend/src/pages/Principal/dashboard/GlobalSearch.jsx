@@ -2,13 +2,24 @@
    teachers from the already-loaded lists. Ctrl K / "/" focus is wired by
    the page; this component handles the dropdown, keyboard nav and actions. */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchStudents } from './data';
+import { fetchStudents as defaultStudentFetcher } from './data';
 import { initials, pct } from './util';
 
 export default function GlobalSearch({
   inputRef, classesAll = [], teachers = [], subjects = [], onOpenClass, onOpenStudent, onOpenTeacher, onOpenSubject,
   placeholder = 'Search students, classes, subjects, teachers…',
+  /* v17: SCHOOLS + GRADES sections (group surfaces — principal sees their
+     own school, the chairperson/dev consoles pass every school in the
+     group). Each entry: school {id, name, avg?, rank?, of?} — grade
+     {grade, avg?, schoolId?}. Handlers are optional; sections hide when
+     the handler is missing. */
+  schools = [], grades = [], onOpenSchool, onOpenGrade,
+  /* v17 CT reuse: console-embedded search sources its students from the
+     CT-scoped payloads instead of /principal/students (role-gated). Pass
+     an async fn ({search, page, pageSize}) → {students, total}. */
+  studentFetcher,
 }) {
+  const fetchStudents = studentFetcher || defaultStudentFetcher;
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [students, setStudents] = useState([]);
@@ -72,13 +83,32 @@ export default function GlobalSearch({
       .map((s, i) => ({ s, me: classes.length + teacherRows.length + studentRows.length + i })),
     [subjects, ql, classes.length, teacherRows.length, studentRows.length],
   );
+  /* v17 group sections — schools first, then grades (rank-ordered) */
+  const schoolRows = useMemo(
+    () => (onOpenSchool ? (schools || [])
+      .filter((s) => !ql || String(s.name).toLowerCase().includes(ql))
+      .slice(0, 3)
+      .map((s, i) => ({ s, me: i }))
+      : []),
+    [schools, ql, onOpenSchool],
+  );
+  const gradeRows = useMemo(() => {
+    if (!onOpenGrade) return [];
+    const base = classes.length + teacherRows.length + studentRows.length + subjectRows.length;
+    return (grades || [])
+      .filter((g) => !ql || String(g.grade) === ql || `grade ${g.grade}`.includes(ql))
+      .slice(0, 4)
+      .map((g, i) => ({ g, me: base + i }));
+  }, [grades, ql, onOpenGrade, classes.length, teacherRows.length, studentRows.length, subjectRows.length]);
 
   const flat = useMemo(() => [
+    ...schoolRows.map(({ s }) => ({ kind: 'school', s })),
+    ...gradeRows.map(({ g }) => ({ kind: 'grade', g })),
     ...classRows.map(({ c }) => ({ kind: 'class', c })),
     ...subjectRows.map(({ s }) => ({ kind: 'subject', s })),
     ...teacherRows.map(({ t }) => ({ kind: 'teacher', t })),
     ...studentRows.map(({ s }) => ({ kind: 'student', s })),
-  ], [classRows, subjectRows, teacherRows, studentRows]);
+  ], [schoolRows, gradeRows, classRows, subjectRows, teacherRows, studentRows]);
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -94,7 +124,9 @@ export default function GlobalSearch({
     setOpen(false);
     setQ('');
     inputRef.current?.blur();
-    if (item.kind === 'class') onOpenClass(item.c.id);
+    if (item.kind === 'school') onOpenSchool?.(item.s);
+    else if (item.kind === 'grade') onOpenGrade?.(item.g);
+    else if (item.kind === 'class') onOpenClass(item.c.id);
     else if (item.kind === 'subject') onOpenSubject?.(item.s);
     else if (item.kind === 'teacher') onOpenTeacher(item.t);
     else onOpenStudent(item.s);
@@ -136,9 +168,37 @@ export default function GlobalSearch({
       <kbd className="gsk">Ctrl K</kbd>
       {open && query ? (
         <div className="gs-pop open" ref={popRef}>
-          {!classes.length && !visibleStudents.length && !subjectRows.length && !loading ? (
+          {!classes.length && !visibleStudents.length && !subjectRows.length && !schoolRows.length && !gradeRows.length && !loading ? (
             <div className="gs-empty">No matches for “{query}”</div>
           ) : null}
+          {schoolRows.length ? <div className="gs-sec">SCHOOLS</div> : null}
+          {schoolRows.map(({ s, me }) => (
+            <div
+              key={`sch${s.id ?? s.name}`}
+              className="gs-item"
+              style={me === active ? { background: 'var(--hov)' } : undefined}
+              onMouseDown={(e) => { e.preventDefault(); choose({ kind: 'school', s }); }}
+              onMouseEnter={() => setActive(me)}
+            >
+              <span className="gi">◉</span>
+              {s.name}
+              <span className="gs">{s.avg != null ? `${pct(s.avg)}%` : 'school'}{s.rank ? ` · rank #${s.rank}${s.of ? `/${s.of}` : ''}` : ''}</span>
+            </div>
+          ))}
+          {gradeRows.length ? <div className="gs-sec">GRADES</div> : null}
+          {gradeRows.map(({ g, me }) => (
+            <div
+              key={`gr${g.schoolId ?? 'x'}-${g.grade}`}
+              className="gs-item"
+              style={me === active ? { background: 'var(--hov)' } : undefined}
+              onMouseDown={(e) => { e.preventDefault(); choose({ kind: 'grade', g }); }}
+              onMouseEnter={() => setActive(me)}
+            >
+              <span className="gi">▤</span>
+              Grade {g.grade}
+              <span className="gs">{g.avg != null ? `${pct(g.avg)}% avg` : 'grade'}</span>
+            </div>
+          ))}
           {classes.length ? <div className="gs-sec">CLASSES</div> : null}
           {classRows.map(({ c, me }) => (
             <div
@@ -150,7 +210,7 @@ export default function GlobalSearch({
             >
               <span className="gi">◆</span>
               {c.name}
-              <span className="gs">{pct(c.avg)}%{c.rank ? ` · rank #${c.rank}` : ''}</span>
+              <span className="gs">{c.avg != null ? `${pct(c.avg)}%` : 'class'}{c.rank ? ` · rank #${c.rank}` : ''}</span>
             </div>
           ))}
           {visibleStudents.length || teacherRows.length ? <div className="gs-sec">PEOPLE</div> : null}
@@ -177,7 +237,7 @@ export default function GlobalSearch({
             >
               <span className="avatar">{initials(s.name)}</span>
               {s.name}
-              <span className="gs">{s.className} · {pct(s.avg)}%</span>
+              <span className="gs">{s.className || ''}{s.avg != null ? ` · ${pct(s.avg)}%` : ''}</span>
             </div>
           ))}
           {subjectRows.length ? <div className="gs-sec">SUBJECTS</div> : null}
@@ -191,7 +251,7 @@ export default function GlobalSearch({
             >
               <span className="gi">▣</span>
               {s.name}
-              <span className="gs">{pct(s.avg)}%</span>
+              <span className="gs">{s.avg != null ? `${pct(s.avg)}%` : ''}</span>
             </div>
           ))}
           {loading ? <div className="gs-empty">Searching…</div> : null}

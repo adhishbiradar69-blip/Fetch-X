@@ -871,3 +871,27 @@ box-shadow:0 0 0 3px rgba(0,0,0,.08)
   .tt-c:hover { transform: translateY(-1px); box-shadow: 0 4px 12px -6px rgba(28, 24, 64, .35); }
 }
 
+
+/* ==== v17: opt-in collapsible tier band (principal/CP dashboards) ======
+   The designer's Sep 8 prototypes let any role collapse the whole tier:
+   clicking the band (or the chevron) toggles `.collapsed` on `.tier`,
+   which hides every `.lvl` section underneath. Base chevron/collapse
+   rules come from the chairperson layer above; the developer layer hides
+   `.tier-chev` globally, so re-show it for the explicit opt-in band. */
+.tier-band.collapsible { cursor: pointer; }
+.tier-band.collapsible .tier-chev { display: grid; }
+@media (hover: hover) {
+  .tier-band.collapsible:hover .tier-chev { background: var(--hov); color: var(--lvlD); }
+}
+
+/* ==== Task 2-e · DevConsole pagehead ===================================
+   developer.html renders ONE pagehead above the tier stage (designer
+   .main inset: 24px 26px). The active tier's own .v15-main stays the
+   scroll container, so .dev-stage becomes a column: the dev pagehead is
+   pinned on top and the mounted tier flex-fills the rest of the stage. */
+.dev-stage { display: flex; flex-direction: column; }
+.dev-stage > .pagehead { flex-shrink: 0; padding: 24px 26px 0; }
+.dev-stage > .dev-tier-on { flex: 1 1 0; min-height: 0; height: auto; }
+@media (max-width: 900px) {
+  .dev-stage > .pagehead { padding: 16px 16px 0; }
+}

@@ -260,7 +260,7 @@ export function SectionSubjects({ termAvg, onOpenSubject, school }) {
 }
 
 /* ============================================================= 03 CLASS */
-function ClassCard({ c, total, onOpen }) {
+function ClassCard({ c, total, onOpen, saved = false, onBookmark }) {
   return (
     <div
       className="card s-card clickable fade"
@@ -274,6 +274,19 @@ function ClassCard({ c, total, onOpen }) {
         <span className="s-name">{c.name}</span>
         <TeachPill name={c.ct_name} tag="CT" title={`Class Teacher · ${c.ct_name || '—'}`} />
         <span className={`rank-pill${c.rank <= 3 ? ' top' : ''}`}>#{c.rank}<span className="of30">/{total}</span></span>
+        {onBookmark && (
+          <button
+            type="button"
+            className={`bm${saved ? ' on' : ''}`}
+            style={{ width: 26, height: 26, flexShrink: 0 }}
+            title="Save class to folder"
+            aria-label={`Save ${c.name} to folder`}
+            onClick={(e) => { e.stopPropagation(); onBookmark(e, { id: c.id, name: c.name }); }}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <Bookmark strokeWidth={2} />
+          </button>
+        )}
       </div>
       <div className="s-body">
         <div className="chips">
@@ -293,6 +306,7 @@ function ClassCard({ c, total, onOpen }) {
 
 export function SectionClasses({
   classesAll, classes, grade, onGrade, loading, onOpenClass,
+  classSavedIds, onClassBookmark,
 }) {
   const grades = useMemo(() => {
     const set = [...new Set((classesAll || []).map((c) => c.grade))].sort((a, b) => a - b);
@@ -333,7 +347,13 @@ export function SectionClasses({
             <div className="grade-block" key={g}>
               <div className="grade-label">GRADE {g}</div>
               <div className="class-grid">
-                {list.map((c) => <ClassCard key={c.id} c={c} total={total} onOpen={onOpenClass} />)}
+                {list.map((c) => (
+                  <ClassCard
+                    key={c.id} c={c} total={total} onOpen={onOpenClass}
+                    saved={classSavedIds ? classSavedIds.has(c.id) : false}
+                    onBookmark={onClassBookmark}
+                  />
+                ))}
               </div>
             </div>
           ))}

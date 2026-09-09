@@ -21,7 +21,7 @@ const TYPES = [
   ['folder', 'FOLDER'],
 ];
 
-export default function CompareModal({ onClose, classesAll = [], folders = [] }) {
+export default function CompareModal({ onClose, classesAll = [], folders = [], school = null }) {
   const reveal = useReveal();
   const grades = useMemo(
     () => [...new Set(classesAll.map((c) => c.grade))].sort((a, b) => a - b),
@@ -30,7 +30,14 @@ export default function CompareModal({ onClose, classesAll = [], folders = [] })
   const [type, setType] = useState('class');
   const [ms, setMs] = useState('');
   const [students, setStudents] = useState(null);
-  const [ents, setEnts] = useState([]); // [{key,type,id,name,color}]
+  /* v17 pre-seed (designer cmpEnts opens with the school entities already
+     selected): the principal's group is exactly one school, so open with
+     it selected. The backend POST /principal/compare resolves type
+     "school". The key matches addEntity's `school|school` so the SCHOOL
+     picker can't add a duplicate. */
+  const [ents, setEnts] = useState(() => (school?.id != null
+    ? [{ key: 'school|school', type: 'school', id: String(school.id), name: school.name || 'Entire School', color: CMP_COLORS[0] }]
+    : [])); // [{key,type,id,name,color}]
   const [metrics, setMetrics] = useState(null); // resolved [{...ents, marks, attendance, tasks, overall}]
   const [printBusy, setPrintBusy] = useState(false);
   const cmpRef = useRef(null);
@@ -124,8 +131,13 @@ export default function CompareModal({ onClose, classesAll = [], folders = [] })
   ];
   const N = (metrics || []).length;
   let note = 'ADD ENTITIES ABOVE TO COMPARE';
-  if (N === 1) note = null;
-  else if (N > 1) {
+  if (N === 1) {
+    /* designer's single-entity note (principal.html cmpNote, N===1) */
+    const solo = metrics[0];
+    note = (
+      <><b style={{ color: solo.color }}>{solo.name}</b> · overall <b>{Math.round(solo.overall)}%</b></>
+    );
+  } else if (N > 1) {
     const best = [...metrics].sort((a, b) => b.overall - a.overall)[0];
     note = (
       <>HIGHEST OVERALL · <b style={{ color: best.color }}>{best.name}</b> ({Math.round(best.overall)}%)</>

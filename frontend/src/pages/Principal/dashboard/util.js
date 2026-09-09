@@ -96,6 +96,35 @@ export function saveFolders(folders) {
   }
 }
 
+/* v17 class bookmark folders — the same folder system the designer added
+   for classes (prototype key `si-class-folders`). Each folder holds class
+   ids; cards resolve live stats from the already-loaded class list. */
+const CLASS_FOLDERS_KEY = 'fx-class-folders';
+
+export function loadClassFolders() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CLASS_FOLDERS_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((f) => f && typeof f === 'object' && Array.isArray(f.classIds))
+      .map((f) => ({
+        id: String(f.id || `c${Date.now()}${Math.floor(Math.random() * 999)}`),
+        name: String(f.name || 'Folder'),
+        classIds: f.classIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export function saveClassFolders(folders) {
+  try {
+    localStorage.setItem(CLASS_FOLDERS_KEY, JSON.stringify(folders));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 /* Escape a string for safe interpolation into title attributes. */
 export const esc = (s) =>
   String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

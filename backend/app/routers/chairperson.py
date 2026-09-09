@@ -28,9 +28,16 @@ from app.models.teacher_assignment import TeacherAssignment
 from app.models.user import User
 from app.models.user_school import UserSchool
 from app.routers.principal import (  # reuse the heavy one-shot helpers
+    _band_counts,
+    _class_rollups,
+    _configured_subjects,
+    _ct_map,
     _gather_school_data,
+    _hod_map,
     _pct_expr,
+    _student_avg_map,
     _term_key,
+    _term_sums,
 )
 from app.services.ai_service import ask_ai, ask_ai_agentic
 from app.services.ai_tools import CHAIRPERSON_TOOLS
@@ -400,6 +407,262 @@ def compare(db: Session = Depends(get_db), user=Depends(_allowed)):
     }
 
 
+# ── v17 multi-entity compare (CP compare sheet) ─────────────────────────────
+# Same response contract as POST /principal/compare — each entity becomes
+# {key, name, marks, attendance, tasks, t1, t2, t3, overall} — but scoped to
+# the GROUP: schools/grades/classes/students across every overseen school.
+# Folders are client-resolved (localStorage) and carry their member ids.
+class CpCompareEntity(BaseModel):
+    type: str  # school | grade | class | student | folder
+    id: Optional[str] = None
+    # display name override (the page shows school + class together)
+    name: Optional[str] = None
+    # folder entities carry their member ids from the client
+    student_ids: Optional[List[int]] = None
+
+
+class CpCompareBody(BaseModel):
+    entities: List[CpCompareEntity]
+
+
+@router.post("/compare")
+def compare_entities(data: CpCompareBody, db: Session = Depends(get_db),
+                     user=Depends(_allowed)):
+    """Multi-entity compare (v17 CP compare sheet) — up to 7 entities, group
+    scoped. Returns per entity:
+    {key, name, marks, attendance, tasks, t1, t2, t3, overall}.
+
+    metrics per type (group-wide, same averaging semantics everywhere else):
+      school  → mean over that school's classes (id = school_id; no id =
+                mean over the whole group)
+      grade   → mean over every class of that grade in the group
+      class   → the class's own rollups (marks / attendance / tasks + terms)
+      student → the student's own all-term average / attendance / tasks
+      folder  → mean over the folder's students (ids resolved by the client)
+    A missing term renders as None (honest "no marks that term"), mirroring
+    the principal sheet's CSV behaviour."""
+    schools = _schools_of(user, db)
+    if not schools:
+        raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
+    if not data.entities:
+        return {"entities": []}
+    if len(data.entities) > 7:
+        raise HTTPException(status_code=400, detail="Compare supports up to 7 entities.")
+    school_ids = [s.id for s in schools]
+    school_names = {s.id: s.name for s in schools}
+
+    need_classes = any(e.type in ("school", "grade", "class") for e in data.entities)
+    need_students = any(e.type in ("student", "folder") for e in data.entities)
+
+    # ── class-level maps (group scoped) ──────────────────────────────────
+    cls_rows: dict[int, dict] = {}
+    cls_term: dict[int, dict[int, float]] = {}
+    if need_classes:
+        for cid_, grade, section, sid_ in (db.query(Class.id, Class.grade, Class.section,
+                                                    Class.school_id)
+                                             .filter(Class.school_id.in_(school_ids)).all()):
+            cls_rows[cid_] = {"grade": grade, "section": section, "school_id": sid_,
+                              "students": 0, "avg": 0.0, "att": 0.0, "tasks": 0.0}
+        if cls_rows:
+            ids = list(cls_rows.keys())
+            for cid_, n in (db.query(Student.class_id, func.count(Student.id))
+                            .filter(Student.class_id.in_(ids))
+                            .group_by(Student.class_id).all()):
+                if cid_ in cls_rows:
+                    cls_rows[cid_]["students"] = n
+            for cid_, s, n in (db.query(Student.class_id, func.sum(_pct_expr()), func.count(Mark.id))
+                               .select_from(Mark)
+                               .join(Exam, Mark.exam_id == Exam.id)
+                               .join(Student, Mark.student_id == Student.id)
+                               .filter(Student.class_id.in_(ids), Exam.max_score > 0)
+                               .group_by(Student.class_id).all()):
+                if cid_ in cls_rows:
+                    cls_rows[cid_]["avg"] = round((s or 0.0) / n, 1) if n else 0.0
+            for cid_, n, p in (db.query(Student.class_id, func.count(Attendance.id),
+                                        func.sum(case((Attendance.status == "P", 1), else_=0)))
+                               .select_from(Attendance)
+                               .join(Student, Attendance.student_id == Student.id)
+                               .filter(Student.class_id.in_(ids))
+                               .group_by(Student.class_id).all()):
+                if cid_ in cls_rows:
+                    cls_rows[cid_]["att"] = round((p or 0) / n * 100, 1) if n else 0.0
+            for cid_, n, c in (db.query(Task.class_id, func.count(TaskCompletion.id),
+                                        func.sum(case((TaskCompletion.status == "completed", 1), else_=0)))
+                               .select_from(TaskCompletion)
+                               .join(Task, TaskCompletion.task_id == Task.id)
+                               .filter(Task.class_id.in_(ids))
+                               .group_by(Task.class_id).all()):
+                if cid_ in cls_rows:
+                    cls_rows[cid_]["tasks"] = round((c or 0) / n * 100, 1) if n else 0.0
+            # per-term averages per class (None when a term has no marks)
+            for cid_, term_label, s, n in (db.query(Student.class_id, Exam.term,
+                                                    func.sum(_pct_expr()), func.count(Mark.id))
+                                             .select_from(Mark)
+                                             .join(Exam, Mark.exam_id == Exam.id)
+                                             .join(Student, Mark.student_id == Student.id)
+                                             .join(Class, Student.class_id == Class.id)
+                                             .filter(Class.school_id.in_(school_ids),
+                                                     Exam.max_score > 0)
+                                             .group_by(Student.class_id, Exam.term).all()):
+                t = _term_key(term_label)
+                if t is not None and n and cid_ in cls_rows:
+                    cls_term.setdefault(cid_, {})[t] = round((s or 0.0) / n, 1)
+
+    def _class_cols(cids: list[int]) -> dict:
+        cols = {}
+        for tn in (1, 2, 3):
+            vals = [cls_term[c][tn] for c in cids if tn in cls_term.get(c, {})]
+            cols[f"t{tn}"] = round(sum(vals) / len(vals), 1) if vals else None
+        return cols
+
+    # ── student-level maps (only for the ids actually requested) ─────────
+    stu_avg: dict[int, float] = {}
+    stu_att: dict[int, float] = {}
+    stu_tasks: dict[int, float] = {}
+    stu_names: dict[int, str] = {}
+    stu_term: dict[int, dict[int, float]] = {}
+    if need_students:
+        req_ids: set[int] = set()
+        for ent in data.entities:
+            if ent.type == "student" and ent.id and str(ent.id).isdigit():
+                req_ids.add(int(ent.id))
+            elif ent.type == "folder":
+                req_ids.update(int(x) for x in (ent.student_ids or [])
+                               if str(x).isdigit())
+        # scope guard: every requested student must live in an overseen school
+        if req_ids:
+            in_scope = set()
+            for sid_, nm in (db.query(Student.id, Student.name)
+                             .join(Class, Student.class_id == Class.id)
+                             .filter(Student.id.in_(req_ids),
+                                     Class.school_id.in_(school_ids)).all()):
+                in_scope.add(sid_)
+                stu_names[sid_] = nm
+            req_ids &= in_scope
+        if req_ids:
+            sids = list(req_ids)
+            for sid_, s, n in (db.query(Mark.student_id, func.sum(_pct_expr()), func.count(Mark.id))
+                               .select_from(Mark)
+                               .join(Exam, Mark.exam_id == Exam.id)
+                               .join(Student, Mark.student_id == Student.id)
+                               .filter(Mark.student_id.in_(sids), Exam.max_score > 0)
+                               .group_by(Mark.student_id).all()):
+                if n:
+                    stu_avg[sid_] = round((s or 0.0) / n, 1)
+            for sid_, n, p in (db.query(Attendance.student_id, func.count(Attendance.id),
+                                        func.sum(case((Attendance.status == "P", 1), else_=0)))
+                               .filter(Attendance.student_id.in_(sids))
+                               .group_by(Attendance.student_id).all()):
+                stu_att[sid_] = round((p or 0) / n * 100, 1) if n else 0.0
+            for sid_, n, done in (db.query(TaskCompletion.student_id,
+                                           func.count(TaskCompletion.id),
+                                           func.sum(case((TaskCompletion.status == "completed", 1), else_=0)))
+                                   .join(Task, TaskCompletion.task_id == Task.id)
+                                   .filter(TaskCompletion.student_id.in_(sids))
+                                   .group_by(TaskCompletion.student_id).all()):
+                stu_tasks[sid_] = round((done or 0) / n * 100, 1) if n else 0.0
+            for sid_, term_label, s, n in (db.query(Mark.student_id, Exam.term,
+                                                    func.sum(_pct_expr()), func.count(Mark.id))
+                                             .select_from(Mark)
+                                             .join(Exam, Mark.exam_id == Exam.id)
+                                             .filter(Mark.student_id.in_(sids),
+                                                     Exam.max_score > 0)
+                                             .group_by(Mark.student_id, Exam.term).all()):
+                t = _term_key(term_label)
+                if t is not None and n:
+                    stu_term.setdefault(sid_, {})[t] = round((s or 0.0) / n, 1)
+
+    def _student_cols(sids: list[int]) -> dict:
+        cols = {}
+        for tn in (1, 2, 3):
+            vals = [stu_term[s][tn] for s in sids if tn in stu_term.get(s, {})]
+            cols[f"t{tn}"] = round(sum(vals) / len(vals), 1) if vals else None
+        return cols
+
+    out = []
+    for i, ent in enumerate(data.entities):
+        etype = (ent.type or "").lower()
+        if etype == "school":
+            sid_ = int(ent.id) if ent.id and str(ent.id).isdigit() else None
+            member_ids = [c for c, r in cls_rows.items()
+                          if (sid_ is None or r["school_id"] == sid_)]
+            if sid_ is not None and sid_ not in school_names:
+                member_ids = []
+            name = ent.name or (school_names.get(sid_, "—") if sid_ is not None
+                                else "Entire Group")
+            if member_ids:
+                att = round(sum(cls_rows[c]["att"] for c in member_ids) / len(member_ids), 1)
+                tsk = round(sum(cls_rows[c]["tasks"] for c in member_ids) / len(member_ids), 1)
+                mrk = round(sum(cls_rows[c]["avg"] for c in member_ids) / len(member_ids), 1)
+                out.append({"key": f"school|{ent.id}", "name": name,
+                            "marks": mrk, "attendance": att, "tasks": tsk})
+                out[-1].update(_class_cols(member_ids))
+            else:
+                out.append({"key": f"school|{ent.id}", "name": name,
+                            "marks": 0.0, "attendance": 0.0, "tasks": 0.0})
+        elif etype == "grade":
+            g = int(ent.id) if ent.id and str(ent.id).isdigit() else None
+            member_ids = [c for c, r in cls_rows.items()
+                          if g is not None and r["grade"] == g]
+            if not member_ids:
+                out.append({"key": f"grade|{ent.id}", "name": ent.name or f"Grade {ent.id}",
+                            "marks": 0.0, "attendance": 0.0, "tasks": 0.0})
+            else:
+                att = round(sum(cls_rows[c]["att"] for c in member_ids) / len(member_ids), 1)
+                tsk = round(sum(cls_rows[c]["tasks"] for c in member_ids) / len(member_ids), 1)
+                mrk = round(sum(cls_rows[c]["avg"] for c in member_ids) / len(member_ids), 1)
+                out.append({"key": f"grade|{g}", "name": ent.name or f"Grade {g} · group",
+                            "marks": mrk, "attendance": att, "tasks": tsk})
+                out[-1].update(_class_cols(member_ids))
+        elif etype == "class":
+            cid_ = int(ent.id) if ent.id and str(ent.id).isdigit() else None
+            r = cls_rows.get(cid_) if cid_ is not None else None
+            if not r:
+                out.append({"key": f"class|{ent.id}", "name": ent.name or "Class —",
+                            "marks": 0.0, "attendance": 0.0, "tasks": 0.0})
+            else:
+                label = (ent.name or f"{school_names.get(r['school_id'], '')} · "
+                         f"{r['grade']}-{r['section']}").strip(" ·") or "Class"
+                out.append({"key": f"class|{cid_}", "name": label,
+                            "marks": r["avg"], "attendance": r["att"], "tasks": r["tasks"]})
+                out[-1].update(_class_cols([cid_]))
+        elif etype == "student":
+            sid_ = int(ent.id) if ent.id and str(ent.id).isdigit() else None
+            if sid_ is None or sid_ not in stu_avg:
+                out.append({"key": f"student|{ent.id}", "name": ent.name or "Student —",
+                            "marks": 0.0, "attendance": 0.0, "tasks": 0.0})
+            else:
+                out.append({"key": f"student|{sid_}", "name": ent.name or stu_names.get(sid_) or f"Student {sid_}",
+                            "marks": stu_avg[sid_],
+                            "attendance": stu_att.get(sid_, 0.0),
+                            "tasks": stu_tasks.get(sid_, 0.0)})
+                out[-1].update(_student_cols([sid_]))
+        elif etype == "folder":
+            ids = [int(x) for x in (ent.student_ids or []) if str(x).isdigit()]
+            valid = [s for s in ids if s in stu_avg]
+            name = ent.name or ent.id or "Folder"
+            if not valid:
+                out.append({"key": f"folder|{i}", "name": str(name),
+                            "marks": 0.0, "attendance": 0.0, "tasks": 0.0})
+            else:
+                out.append({
+                    "key": f"folder|{i}", "name": str(name),
+                    "marks": round(sum(stu_avg[s] for s in valid) / len(valid), 1),
+                    "attendance": round(sum(stu_att.get(s, 0.0) for s in valid) / len(valid), 1),
+                    "tasks": round(sum(stu_tasks.get(s, 0.0) for s in valid) / len(valid), 1),
+                })
+                out[-1].update(_student_cols(valid))
+        else:
+            raise HTTPException(status_code=400,
+                                detail="entity.type must be school|grade|class|student|folder")
+
+    for e in out:
+        e["overall"] = round((e["marks"] + e["attendance"] + e["tasks"]) / 3, 1)
+        for k, _tn in (("t1", 1), ("t2", 2), ("t3", 3)):
+            e.setdefault(k, None)
+    return {"entities": out}
+
+
 @router.get("/rankings")
 def rankings(db: Session = Depends(get_db), user=Depends(_allowed)):
     """Rank all schools by: overall avg, attendance, lowest at-risk count."""
@@ -449,6 +712,106 @@ def school_inspect(school_id: int, db: Session = Depends(get_db), user=Depends(_
         "subjects": data["subjects"],
         "exams": data["exams"],
         "top_performer": data["top_performer"],
+    }
+
+
+@router.get("/classes/{class_id}/inspect")
+def class_inspect(class_id: int, db: Session = Depends(get_db), user=Depends(_allowed)):
+    """v17 drill-down: full report for ONE class anywhere in the group.
+
+    Mirrors the /principal/class-detail/{id} contract exactly (info,
+    subjects with t1/t2/t3, score distribution, ranked students) so the
+    shared ClassDetail view renders it unchanged. The chairperson's scope
+    is the whole group: every class of every overseen school is reachable,
+    read-only. The SQL reuses the principal router's helpers with the
+    class's own school, so every number matches what that school's
+    principal sees by construction. Additive key vs the principal payload:
+    "school" {id, name} (the CP page labels the drill-down with it)."""
+    schools = _schools_of(user, db)
+    if not schools:
+        raise HTTPException(status_code=404, detail="No schools overseen by this chairperson.")
+    overseen = {s.id: s for s in schools}
+    cls = db.query(Class).filter(Class.id == class_id).first()
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found.")
+    if cls.school_id not in overseen:
+        raise HTTPException(status_code=403, detail="You do not oversee this school.")
+    school = overseen[cls.school_id]
+
+    rollups = _class_rollups(db, school)
+    ct = _ct_map(db, school)
+    classes = (db.query(Class).filter(Class.school_id == school.id).all())
+    ranked = sorted([c.id for c in classes], key=lambda cid: (-rollups[cid]["avg"], cid))
+    rank_of = {cid: i for i, cid in enumerate(ranked, start=1)}
+
+    agg = _term_sums(db, school, class_id=cls.id)
+    hod = _hod_map(db, school.id)
+    subjects = []
+    for sub in _configured_subjects(db, school.id):
+        ts, tn = agg["per_s"].get(sub.id, [0.0, 0])
+        row = {"name": sub.name, "hod": hod.get(sub.id)}
+        for t in (1, 2, 3):
+            s_, n_ = agg["per_ts"].get((sub.id, t), [0.0, 0])
+            row[f"t{t}"] = round(s_ / n_, 1) if n_ else 0.0
+        row["avg"] = round(ts / tn, 1) if tn else 0.0
+        subjects.append(row)
+
+    students = (db.query(Student).filter(Student.class_id == cls.id).all())
+    att = dict((sid, (p or 0) * 100.0 / n) for sid, n, p in
+               (db.query(Attendance.student_id, func.count(Attendance.id),
+                         func.sum(case((Attendance.status == "P", 1), else_=0)))
+                .filter(Attendance.student_id.in_([s.id for s in students] or [0]))
+                .group_by(Attendance.student_id).all()))
+    avg_map = _student_avg_map(db, school)
+    pct_expr = _pct_expr()
+    ss_map: dict[tuple[int, int], float] = {}
+    for sid_, subj_id_, s_, n_ in (db.query(Student.id, Mark.subject_id,
+                                            func.sum(pct_expr), func.count(Mark.id))
+                                     .select_from(Mark)
+                                     .join(Exam, Mark.exam_id == Exam.id)
+                                     .join(Student, Mark.student_id == Student.id)
+                                     .filter(Student.class_id == cls.id, Exam.max_score > 0)
+                                     .group_by(Student.id, Mark.subject_id).all()):
+        if n_:
+            ss_map[(sid_, subj_id_)] = round(s_ / n_, 1)
+    subject_name_by_id = {sub_.id: sub_.name for sub_ in _configured_subjects(db, school.id)}
+    student_rows = []
+    for s in students:
+        scores = {}
+        for (stu_id, subj_id), v in ss_map.items():
+            if stu_id == s.id and subj_id in subject_name_by_id:
+                scores[subject_name_by_id[subj_id]] = v
+        student_rows.append({
+            "id": s.id,
+            "name": s.name,
+            "avg": round(avg_map.get(s.id, 0.0), 1),
+            "attendance_pct": round(att.get(s.id, 0.0), 1),
+            "subject_scores": scores,
+        })
+    student_rows.sort(key=lambda r: (-r["avg"], r["name"]))
+    for i, r in enumerate(student_rows, start=1):
+        r["rank"] = i
+
+    return {
+        "info": {
+            "id": cls.id,
+            "grade": cls.grade,
+            "section": cls.section,
+            "name": f"{cls.grade}-{cls.section}",
+            "ct_name": ct[cls.id]["ct_name"],
+            "ct_subject": ct[cls.id]["ct_subject"],
+            "students": rollups[cls.id]["students"],
+            "avg": rollups[cls.id]["avg"],
+            "attendance_pct": rollups[cls.id]["attendance_pct"],
+            "tasks_pct": rollups[cls.id]["tasks_pct"],
+            "rank": rank_of[cls.id],
+        },
+        "subjects": subjects,
+        "distribution": _band_counts(db, school, class_id=cls.id),
+        "attendance_pct": rollups[cls.id]["attendance_pct"],
+        "tasks_pct": rollups[cls.id]["tasks_pct"],
+        "students": student_rows,
+        "school": {"id": school.id, "name": school.name},
     }
 
 
@@ -810,6 +1173,11 @@ def _build_v16_bundle(db: Session, schools: list[School],
         grade_term_acc: dict[int, dict] = defaultdict(
             lambda: {1: [0.0, 0], 2: [0.0, 0], 3: [0.0, 0]})
         band_counts = {b: 0 for b in _V16_BANDS}
+        # v17: per-(grade, subject) term accumulation — powers the APERF
+        # GRADE scope (subject radar per term at grade level), which the
+        # school-level subjects[] cannot answer.
+        g_subj_term_acc: dict[tuple[int, int], dict] = defaultdict(
+            lambda: {1: [0.0, 0], 2: [0.0, 0], 3: [0.0, 0]})
         for st in data["_student_stats"].values():
             grade = st["grade"]
             for subj_id, pct, exam_id in st["_marks"]:
@@ -825,6 +1193,9 @@ def _build_v16_bundle(db: Session, schools: list[School],
                     g_acc = grade_term_acc[grade][t]
                     g_acc[0] += pct
                     g_acc[1] += 1
+                    gs_acc = g_subj_term_acc[(grade, subj_id)][t]
+                    gs_acc[0] += pct
+                    gs_acc[1] += 1
                 band_counts[_v16_band_of(pct)] += 1
         school_term_accs[s.id] = term_acc
 
@@ -851,6 +1222,19 @@ def _build_v16_bundle(db: Session, schools: list[School],
             top10 = sorted((st for st in data["_student_stats"].values()
                             if st["grade"] == grade),
                            key=lambda st: (-st["average"], st["name"].lower()))[:10]
+            # v17 additions (all additive keys — the v16 page ignores them):
+            #   sections[].id/att/students → global search + saved classes +
+            #   the class drill-down; subject_terms[] → the APERF GRADE scope
+            #   (subject radar per term at grade level).
+            g_subjects = []
+            for sub in data["subjects"]:
+                gs_accs = g_subj_term_acc.get((grade, sub["subject_id"]))
+                if not gs_accs or not any(v[1] for v in gs_accs.values()):
+                    continue
+                g_subjects.append({
+                    "name": sub["name"],
+                    "t": [_v16_term_avg(gs_accs, t) for t in (1, 2, 3)],
+                })
             grade_rows.append({
                 "grade": grade,
                 "avg": g_row["average"],
@@ -860,8 +1244,12 @@ def _build_v16_bundle(db: Session, schools: list[School],
                 "task": round(c_tasks / n_tasks * 100, 1) if n_tasks else 0.0,
                 "marks": g_row["average"],
                 "overall": g_row["average"],
-                "sections": [{"section": c["section"], "avg": c["average"]}
+                "sections": [{"section": c["section"], "avg": c["average"],
+                              "id": c["class_id"],
+                              "att": c["attendance_rate"],
+                              "students": c["students"]}
                              for c in data["classes"] if c["grade"] == grade],
+                "subject_terms": g_subjects,
                 "students_top10": [{"id": st["student_id"], "name": st["name"],
                                     "class": f"{st['grade']}-{st['section']}",
                                     "avg": st["average"]} for st in top10],
@@ -991,7 +1379,9 @@ def v16_bundle(db: Session = Depends(get_db), user=Depends(_allowed)):
                   marks, principal, students, org_rank, distribution,
                   attendance_series, subjects[{name,avg,t,hod,rank}],
                   grades[{grade,avg,t,att,task,marks,overall,sections,
-                          grank_in_school,xrank_across,students_top10}]}]}
+                          grank_in_school,xrank_across,students_top10,
+                          v17: sections[{section,avg,id,att,students}],
+                               subject_terms[{name,t[3]}]}]}]}
     Cached with the same TTL/single-flight pattern as the multi-school gather.
     """
     schools = _schools_of(user, db)

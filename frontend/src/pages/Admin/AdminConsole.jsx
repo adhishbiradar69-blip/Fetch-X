@@ -4,38 +4,62 @@
      01 Admin Dashboard · .card-stats (6 cells) ← GET /admin/stats
      02 Classes · grade tabs → grade-blocks of class cards ← GET /admin/classes
         └ roster view (adClsSec pattern, server-paginated ?class_id=)
+          └ .dm-act "+ ADD STUDENT" / "+ ADD BULK" → POST /admin/students
      03 Staff List · search + rows ← GET /principal/teachers
+        └ row opens the faculty report (TeacherReportModal); arrow edits
         └ Edit Staff modal → PUT /admin/staff/{id}
      04 All Students · search + rows ← GET /admin/students (page/page_size)
+        └ row opens the report card (ReportCardModal)
         └ Edit Student modal → PUT /admin/students/{id}
         └ ✕ deletes IMMEDIATELY (no confirm — hard delete backend) with an
           honest "{name} removed" toast (8s auto-dismiss, no undo promise).
-   The pagehead gsearch mirrors the designer's global-search popover simply:
-   live class + staff matches, and Enter / the STUDENTS entry jumps to
-   All Students with the query applied (server-side ?search=).
+
+   v17 designer delta (Task 2-d):
+   · Add Student / Add Bulk modals (admin16/AddStudentModal.jsx) from the
+     roster header; freshly created ids render a .newtag NEW pill for the
+     rest of the browser session.
+   · Saved students — bookmark (.bm) rows into the shared 'fx-folders'
+     store (admin16/saved.js wraps the Principal dashboard util), a .bm-pop
+     folder picker, and a sidebar "Saved" view reusing SavedStudents.
+   · Report cards — student rows open ReportCardModal, staff rows open
+     TeacherReportModal (both /principal/* reports allow school_admin).
+   · Theme buttons on every section head + the collapsible tier band.
+   · The pagehead gsearch is now the shared GlobalSearch: students come
+     from /admin/students?search=, classes/teachers/subjects from the
+     loaded lists; Ctrl K + "/" focus is kept.
    Old pages /admin/accounts + /admin/extra-teachers stay reachable by URL
    only — they are not part of the designer's sidebar. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Moon, Sun } from 'lucide-react';
+import { Bookmark, Moon, Plus, Sun } from 'lucide-react';
 import { PageHead, Tier, TierBand } from '../../components/v16/Shell';
 import { TIER_ICONS } from '../../components/v16/icons';
 import ExportCsvButton from '../../components/v16/ExportCsvButton';
 import EmptyState from '../../components/v16/EmptyState';
 import DashSidebar from '../Principal/dashboard/DashSidebar';
+import GlobalSearch from '../Principal/dashboard/GlobalSearch';
+import ReportCardModal from '../Principal/dashboard/ReportCardModal';
+import TeacherReportModal from '../Principal/dashboard/TeacherReportModal';
+import SavedStudents from '../Principal/dashboard/SavedStudents';
+import { LevelThemeStyle, ThemeBtn } from '../Principal/dashboard/LevelThemes';
 import { Toast } from '../../components/ui';
 import { useTheme } from '../../components/ThemeProvider';
 import { useAuth } from '../../auth/AuthContext';
 import { csvStamp, fetchAllPages } from '../../lib/csv';
 import {
   fetchStats, fetchTeachers, fetchClasses, fetchSubjects, fetchStudentsPage,
-  fetchClassCount, deleteStudent, initialsOf, subjectShort, errOf,
+  fetchClassCount, deleteStudent, subjectShort, errOf,
 } from './admin16/api';
+import {
+  loadStudentFolders, savedIdsOf, createStudentFolder, deleteStudentFolder, toggleStudentInFolder,
+} from './admin16/saved';
 import {
   ICO_SEARCH, ICO_PERSON, ICO_EDIT, ICO_X, ICO_ARROW,
   ICO_STU_TOTAL, ICO_CLS_TOTAL, ICO_RANK, ICO_ATT, ICO_TASKS, ICO_MARKS,
 } from './admin16/icons';
+import AddStudentModal, { AddBulkModal } from './admin16/AddStudentModal';
 import EditStaffModal from './admin16/EditStaffModal';
 import EditStudentModal from './admin16/EditStudentModal';
 import '../Principal/dashboard/dashboard.css';
@@ -108,10 +132,64 @@ export default function AdminConsole() {
   });
   useEffect(() => { try { localStorage.setItem('si-nav', navCollapsed ? '1' : '0'); } catch { /* ignore */ } }, [navCollapsed]);
 
+  /* v17: the tier band can collapse every .lvl section below it (designer
+     chevron). Opening a roster or jumping via the nav re-expands it. */
+  const [tierCollapsed, setTierCollapsed] = useState(false);
+
   const [toast, setToast] = useState(null);
   const showToast = useCallback((msg, type = 'success', dur) => {
     setToast({ msg, type, dur, key: Date.now() });
   }, []);
+
+  /* ---------------- v17 · saved students + report modals ---------------- */
+  const [folders, setFolders] = useState(loadStudentFolders);
+  const savedIds = useMemo(() => savedIdsOf(folders), [folders]);
+  const [bmPop, setBmPop] = useState(null); // { student, left, top }
+  const [bmNew, setBmNew] = useState('');
+  const [reportId, setReportId] = useState(null);
+  const [teacherId, setTeacherId] = useState(null);
+  const [savedView, setSavedView] = useState(false);
+  const [addModal, setAddModal] = useState(null); // { mode: 'one' | 'bulk', cls }
+  const [newIds, setNewIds] = useState(() => new Set()); // ids created this session → .newtag
+
+  const createFolder = useCallback((name) => {
+    const next = createStudentFolder(folders, name);
+    if (!next) return null;
+    setFolders(next);
+    return next[next.length - 1];
+  }, [folders]);
+  const deleteFolder = useCallback((id) => setFolders(deleteStudentFolder(folders, id)), [folders]);
+  const toggleInFolder = useCallback((fid, sid) => setFolders(toggleStudentInFolder(folders, fid, sid)), [folders]);
+
+  /* .bm click → position the folder picker popover under the button */
+  const onBookmark = useCallback((e, student) => {
+    if (!student?.id) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const w = 230;
+    const left = Math.min(Math.max(10, rect.left - 90), window.innerWidth - w - 10);
+    const top = rect.bottom + 8 + (window.innerHeight - rect.bottom < 260 ? -rect.height - 250 : 0);
+    setBmPop({ student: { id: student.id, name: student.name || `Student ${student.id}` }, left, top });
+  }, []);
+
+  /* report-card opener shared by rows, the global search, the Saved view
+     and the teacher report's student cohort */
+  const openReport = useCallback((s) => { setBmPop(null); setReportId(s?.id ?? null); }, []);
+
+  /* close the bookmark popover on any outside click or scroll */
+  useEffect(() => {
+    if (!bmPop) return undefined;
+    const close = (e) => {
+      if (e.target.closest?.('.bm-pop')) return;
+      setBmPop(null);
+    };
+    const onScroll = () => setBmPop(null);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('scroll', onScroll, true);
+    };
+  }, [bmPop]);
 
   /* ---------------- data ---------------- */
   const [stats, setStats] = useState(null);
@@ -285,7 +363,7 @@ export default function AdminConsole() {
     const el = mainRef.current;
     if (!el) return undefined;
     const onScroll = () => {
-      if (rosterCls) return;
+      if (rosterCls || savedView) return;
       const top = el.getBoundingClientRect().top;
       let cur = 'adDashSec';
       ['adDashSec', 'adClassSec', 'adStaffSec', 'adStuSec'].forEach((id) => {
@@ -296,20 +374,30 @@ export default function AdminConsole() {
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [rosterCls]);
+  }, [rosterCls, savedView]);
 
   const scrollSec = useCallback((id) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
   const onNav = useCallback((key) => {
+    if (key === 'saved') {
+      /* v17 Saved view — replaces the tier content until a section link or
+         the view's back button restores the dashboard */
+      setRosterCls(null);
+      setSavedView(true);
+      mainRef.current?.scrollTo({ top: 0 });
+      return;
+    }
     const id = NAV_OF[key];
     if (!id) return;
+    setSavedView(false);
+    setTierCollapsed(false);
     if (rosterCls) {
       setRosterCls(null);
       requestAnimationFrame(() => scrollSec(id));
     } else {
-      scrollSec(id);
+      requestAnimationFrame(() => scrollSec(id));
     }
   }, [rosterCls, scrollSec]);
 
@@ -319,6 +407,7 @@ export default function AdminConsole() {
   const openRoster = useCallback((c) => {
     setRoRows(null);
     setRoQ('');
+    setTierCollapsed(false);
     setRosterCls(c);
     mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
@@ -327,6 +416,18 @@ export default function AdminConsole() {
     setRosterCls(null);
     requestAnimationFrame(() => scrollSec('adClassSec'));
   }, [scrollSec]);
+
+  /* v17: open a roster from the global search / teacher-report modal by id */
+  const openClassById = useCallback((id) => {
+    const c = (classes || []).find((x) => x.id === id);
+    setSavedView(false);
+    setBmPop(null);
+    if (!c) {
+      showToast('That class is not in the loaded class list yet — try again in a moment.', 'error');
+      return;
+    }
+    openRoster(c);
+  }, [classes, openRoster, showToast]);
 
   /* ---------------- 03 staff ---------------- */
   const [staffQ, setStaffQ] = useState('');
@@ -406,31 +507,49 @@ export default function AdminConsole() {
     refreshStats();
   }, [showToast, loadStudents, stQ, rosterCls, loadRoster, roQ, refreshCounts, refreshStats]);
 
-  /* ---------------- global search (designer gsearch, honest helper) ------- */
-  const [gsQ, setGsQ] = useState('');
-  const [gsOpen, setGsOpen] = useState(false);
-  const gsRef = useRef(null);
+  /* v17: Add Student / Add Bulk landed — tag the created ids (NEW pill for
+     the session), refetch both lists + counts so search/pagination stay
+     truthful, and report the batch result honestly. */
+  const onStudentCreated = useCallback((created, failed = []) => {
+    const cls = addModal?.cls;
+    setAddModal(null);
+    if (!cls) return;
+    setNewIds((prev) => {
+      const next = new Set(prev);
+      created.forEach((r) => next.add(r.id));
+      return next;
+    });
+    showToast(
+      failed.length
+        ? `${created.length} of ${created.length + failed.length} students added — ${failed.length} could not be saved`
+        : created.length === 1
+          ? `${created[0].name} added to ${clsName(cls)}`
+          : `${created.length} students added`,
+      failed.length ? 'error' : 'success',
+    );
+    loadStudents({ q: stQ, page: 1 });
+    if (rosterCls) loadRoster({ cls: rosterCls, q: roQ, page: 1 });
+    refreshCounts([cls.id]);
+    refreshStats();
+  }, [addModal, showToast, loadStudents, stQ, rosterCls, loadRoster, roQ, refreshCounts, refreshStats]);
+
+  /* ---------------- global search (shared GlobalSearch, v17) -------------- */
+  /* Students come from the admin roster endpoint (server-side search). The
+     admin payload carries no academic data, so rows map to id/name/class
+     only — avg/rank are omitted honestly rather than faked as 0. */
   const gsInputRef = useRef(null);
-  const q = gsQ.trim().toLowerCase();
 
-  const gsCls = useMemo(() => (
-    q && classes ? classes.filter((c) => clsName(c).includes(q)).slice(0, 4) : []
-  ), [q, classes]);
-  const gsTch = useMemo(() => (
-    q && teachers ? teachers.filter((t) => `${t.name} ${t.subject || ''}`.toLowerCase().includes(q)).slice(0, 4) : []
-  ), [q, teachers]);
-
-  const jumpStudents = useCallback((raw) => {
-    setGsOpen(false);
-    setGsQ('');
-    setStQ(raw.trim());
-    if (rosterCls) {
-      setRosterCls(null);
-      requestAnimationFrame(() => scrollSec('adStuSec'));
-    } else {
-      scrollSec('adStuSec');
-    }
-  }, [rosterCls, scrollSec]);
+  const adminStudentFetcher = useCallback(async ({ search, page, pageSize }) => {
+    const d = await fetchStudentsPage({ search, page, pageSize });
+    return {
+      students: d.students.map((s) => ({
+        id: s.id,
+        name: s.name,
+        className: s.class_name || s.class_label || '',
+      })),
+      total: d.total,
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -441,16 +560,14 @@ export default function AdminConsole() {
       } else if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
         e.preventDefault();
         gsInputRef.current?.focus();
+      } else if (e.key === 'Escape') {
+        setBmPop(null);
+        setReportId(null);
+        setTeacherId(null);
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, []);
-
-  useEffect(() => {
-    const onDown = (e) => { if (!gsRef.current?.contains(e.target)) setGsOpen(false); };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
   }, []);
 
   /* ---------------- derived copy ---------------- */
@@ -481,17 +598,29 @@ export default function AdminConsole() {
     <div
       key={`s${s.id}`}
       className={opts.roster ? 'srow adm-roster' : 'srow'}
-      title="Edit student — name, class, section, details"
-      onClick={() => setEditStu(s)}
+      title={opts.roster ? 'Edit student — name, class, section, details' : 'Open report card'}
+      onClick={() => (opts.roster ? setEditStu(s) : setReportId(s.id))}
     >
       {opts.roster && <span className="adm-idx">{opts.idx + 1}</span>}
       <span className="st-name" style={opts.roster ? undefined : { gridColumn: '1/3' }}>
         <span className="nm" style={opts.roster ? undefined : { fontSize: 13 }}>{s.name}</span>
+        {newIds.has(s.id) && <span className="newtag">NEW</span>}
         {opts.roster && <span className="classchip" style={{ padding: '4px 8px' }}>{s.section}</span>}
       </span>
       {!opts.roster && <span className="classchip">{s.grade}</span>}
       {!opts.roster && <span style={{ fontSize: 11, color: 'var(--muted)' }}>{s.section || '—'}</span>}
       <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+        {!opts.roster && (
+          <button
+            type="button"
+            className={`bm${savedIds.has(s.id) ? ' on' : ''}`}
+            title="Save to folder"
+            aria-label={`Save ${s.name} to folder`}
+            onClick={(e) => { e.stopPropagation(); onBookmark(e, s); }}
+          >
+            <Bookmark strokeWidth={2} />
+          </button>
+        )}
         <button
           type="button" className="tb" title="Edit student — name, class, section, details"
           onClick={(e) => { e.stopPropagation(); setEditStu(s); }}
@@ -509,7 +638,7 @@ export default function AdminConsole() {
   );
 
   const staffRow = (t) => (
-    <div key={`t${t.id}`} className="srow" title="Edit staff details" onClick={() => setEditStaff(t)}>
+    <div key={`t${t.id}`} className="srow" title="Open teacher report" onClick={() => setTeacherId(t.id)}>
       <span className="st-name" style={{ gridColumn: '1/3' }}>
         <span className="nm" style={{ fontSize: 13 }}>
           {t.name}{t.is_hod ? ' · HOD' : ''}{t.is_ct ? ' · CT' : ''}
@@ -517,7 +646,13 @@ export default function AdminConsole() {
       </span>
       <span className="classchip" title={t.subject || ''}>{subjectShort(t.subject)}</span>
       <span style={{ fontSize: 11, color: 'var(--muted)' }}>{t.classes_count} cls</span>
-      <button type="button" className="tb" title="Edit staff details">{ICO_ARROW}</button>
+      <button
+        type="button" className="tb" title="Edit staff details"
+        aria-label={`Edit ${t.name}`}
+        onClick={(e) => { e.stopPropagation(); setEditStaff(t); }}
+      >
+        {ICO_ARROW}
+      </button>
     </div>
   );
 
@@ -550,12 +685,12 @@ export default function AdminConsole() {
 
   return (
     <div className={`pd-root v15-root${navCollapsed ? ' nav-collapsed' : ''}`}>
+      <LevelThemeStyle />
       <DashSidebar
         logo
         roleLabel="ADMIN"
-        savedCount={0}
-        savedHidden
-        active={activeKey}
+        savedCount={savedIds.size}
+        active={savedView ? 'saved' : activeKey}
         activeGroup="ad"
         onGo={onNav}
         onToggle={() => setNavCollapsed((c) => !c)}
@@ -574,58 +709,38 @@ export default function AdminConsole() {
       />
 
       <main className="v15-main pd-main" ref={mainRef}>
+        {savedView ? (
+          /* v17 Saved view — the designer's sidebar "Saved" page, reusing
+             the Principal dashboard's folder view (report lookups hit
+             /principal/student-report, which allows school_admin). */
+          <SavedStudents
+            folders={folders}
+            onCreate={createFolder}
+            onDeleteFolder={deleteFolder}
+            onRemoveStudent={toggleInFolder}
+            onBack={() => { setSavedView(false); mainRef.current?.scrollTo({ top: 0 }); }}
+            onOpenReport={openReport}
+            savedCount={savedIds.size}
+          />
+        ) : (
+        <>
         <PageHead
           tier="ad"
           eyebrow="Fetch-X · Admin Console"
           title="Admin Dashboard"
           subtitle={`Admin · Data management for the ${schoolLabel} campus — students, staff, and classes`}
           searchSlot={(
-            <div className="pagehead-mid gsearch" ref={gsRef}>
-              {ICO_SEARCH}
-              <input
-                ref={gsInputRef}
-                type="text"
-                value={gsQ}
-                placeholder={stats ? `Search ${stats.students} students, ${stats.teachers} staff, classes…` : 'Search students, staff, classes…'}
-                onChange={(e) => { setGsQ(e.target.value); setGsOpen(true); }}
-                onFocus={() => { if (gsQ.trim()) setGsOpen(true); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') jumpStudents(gsQ); }}
-                autoComplete="off"
-                aria-label="Global search"
-              />
-              <kbd>Ctrl K</kbd>
-              {gsOpen && q && (
-                <div className="gs-pop open" onMouseDown={(e) => e.preventDefault()}>
-                  {gsCls.length > 0 && (
-                    <>
-                      <div className="gs-sec">CLASSES</div>
-                      {gsCls.map((c) => (
-                        <div key={`gsc${c.id}`} className="gs-item" onClick={() => { setGsOpen(false); setGsQ(''); openRoster(c); }}>
-                          <span className="gi">◆</span>{clsName(c)}
-                          <span className="gs">{clsCounts[c.id] ?? '…'} students</span>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  {gsTch.length > 0 && (
-                    <>
-                      <div className="gs-sec">TEACHERS</div>
-                      {gsTch.map((t) => (
-                        <div key={`gst${t.id}`} className="gs-item" onClick={() => { setGsOpen(false); setGsQ(''); setEditStaff(t); }}>
-                          <span className="avatar">{initialsOf(t.name)}</span>{t.name}
-                          <span className="gs">{t.subject || '—'} · #{t.rank}</span>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  <div className="gs-sec">STUDENTS</div>
-                  <div className="gs-item" onClick={() => jumpStudents(gsQ)}>
-                    <span className="gi">▣</span>Search students for “{gsQ.trim()}”
-                    <span className="gs">ALL STUDENTS →</span>
-                  </div>
-                </div>
-              )}
-            </div>
+            <GlobalSearch
+              inputRef={gsInputRef}
+              classesAll={(classes || []).map((c) => ({ id: c.id, name: clsName(c) }))}
+              teachers={teachers || []}
+              subjects={subjects}
+              studentFetcher={adminStudentFetcher}
+              placeholder={stats ? `Search ${stats.students} students, ${stats.teachers} staff, classes…` : 'Search students, staff, classes…'}
+              onOpenClass={openClassById}
+              onOpenStudent={openReport}
+              onOpenTeacher={(t) => setTeacherId(t.id)}
+            />
           )}
           actions={(
             <button type="button" className="btn-mode" onClick={toggle} aria-label="Toggle theme" title="Dark / light mode">
@@ -634,12 +749,15 @@ export default function AdminConsole() {
           )}
         />
 
-        <Tier tier="ad" extraClass="tier-ad">
+        <Tier tier="ad" extraClass={`tier-ad${tierCollapsed ? ' collapsed' : ''}`}>
           <TierBand
             tier="ad" lvl={1} icon={TIER_ICONS.ad}
             eyebrow="TIER 01 · DATA MANAGEMENT"
             copy={`Students, staff, and classes — school data management for ${schoolLabel}.`}
             tag={`${SHORT} · DATA MANAGEMENT`}
+            collapsible
+            collapsed={tierCollapsed}
+            onToggleCollapse={() => setTierCollapsed((c) => !c)}
           />
 
           {!rosterCls && (
@@ -654,6 +772,7 @@ export default function AdminConsole() {
                   </div>
                   <span className="lvl-rule" />
                   <span className="lvl-tag">{SHORT} · LIVE DATA</span>
+                  <ThemeBtn lvl={1} />
                 </header>
                 <div className="card card-stats fade" id="adDashStats">
                   {!stats || statsErr ? (
@@ -710,6 +829,7 @@ export default function AdminConsole() {
                   </div>
                   <span className="lvl-rule" />
                   <span className="lvl-tag">{classes?.length ?? '—'} CLASSES · 10 GRADES</span>
+                  <ThemeBtn lvl={2} />
                 </header>
                 <div className="rank-tabs fade" id="adGradeTabs">
                   <button type="button" className={`gtab${gradeTab === 'all' ? ' active' : ''}`} onClick={() => setGradeTab('all')}>ALL</button>
@@ -750,10 +870,11 @@ export default function AdminConsole() {
                   <span className="lvl-num">03</span>
                   <div className="lvl-tt">
                     <h2>Staff List</h2>
-                    <p>Every teaching staff member at {schoolLabel} — click a row to view details, credentials, and edit.</p>
+                    <p>Every teaching staff member at {schoolLabel} — click a row for the faculty report, use the arrow to edit.</p>
                   </div>
                   <span className="lvl-rule" />
                   <span className="lvl-tag">{staffCount} STAFF · CLICK FOR DETAILS</span>
+                  <ThemeBtn lvl={3} />
                 </header>
                 <div className="searchbar fade">
                   {ICO_SEARCH}
@@ -798,10 +919,11 @@ export default function AdminConsole() {
                   <span className="lvl-num">04</span>
                   <div className="lvl-tt">
                     <h2>All Students</h2>
-                    <p>Every student at {schoolLabel} in one list — click a row to edit, or use ✕ to remove.</p>
+                    <p>Every student at {schoolLabel} in one list — click a row for the report card, or use ✕ to remove.</p>
                   </div>
                   <span className="lvl-rule" />
                   <span className="lvl-tag">{stuCount ?? '—'} STUDENTS · CLICK FOR DETAILS</span>
+                  <ThemeBtn lvl={4} />
                 </header>
                 <div className="searchbar fade">
                   {ICO_SEARCH}
@@ -862,6 +984,21 @@ export default function AdminConsole() {
                 </div>
                 <span className="lvl-rule" />
                 <span className="lvl-tag">{roLoading && !roRows ? '…' : roTotal} STUDENTS · CLICK FOR DETAILS</span>
+                <div className="dm-act">
+                  <button
+                    type="button" className="ct-btn solid"
+                    onClick={() => setAddModal({ mode: 'one', cls: rosterCls })}
+                  >
+                    + ADD STUDENT
+                  </button>
+                  <button
+                    type="button" className="ct-btn"
+                    onClick={() => setAddModal({ mode: 'bulk', cls: rosterCls })}
+                  >
+                    + ADD BULK
+                  </button>
+                </div>
+                <ThemeBtn lvl={2} />
               </header>
               <button type="button" className="btn-back" onClick={closeRoster}>← BACK TO CLASSES</button>
               <div className="searchbar fade">
@@ -912,7 +1049,27 @@ export default function AdminConsole() {
             </section>
           )}
         </Tier>
+        </>
+        )}
       </main>
+
+      {/* ---------------- v17 · add student / add bulk ---------------- */}
+      {addModal?.mode === 'one' && (
+        <AddStudentModal
+          cls={addModal.cls}
+          schoolName={SCHOOL || '—'}
+          onClose={() => setAddModal(null)}
+          onCreated={onStudentCreated}
+        />
+      )}
+      {addModal?.mode === 'bulk' && (
+        <AddBulkModal
+          cls={addModal.cls}
+          schoolName={SCHOOL || '—'}
+          onClose={() => setAddModal(null)}
+          onCreated={onStudentCreated}
+        />
+      )}
 
       {/* ---------------- edit modals ---------------- */}
       {editStaff && (
@@ -932,6 +1089,85 @@ export default function AdminConsole() {
           onClose={() => setEditStu(null)}
           onSaved={(upd) => onStudentSaved(editStu, upd)}
         />
+      )}
+
+      {/* ---------------- v17 · bookmark folder picker (designer .bm-pop) -- */}
+      {bmPop && createPortal(
+        <div className="bm-pop open" style={{ left: bmPop.left, top: bmPop.top }} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="bmp-t">SAVE · {bmPop.student.name.toUpperCase()}</div>
+          <div>
+            {folders.length ? folders.map((f) => (
+              <label className="bmopt" key={f.id}>
+                <input
+                  type="checkbox"
+                  checked={f.studentIds.includes(bmPop.student.id)}
+                  onChange={() => toggleInFolder(f.id, bmPop.student.id)}
+                />
+                <i className="bx" />
+                <span>{f.name}</span>
+                <em>{f.studentIds.length}</em>
+              </label>
+            )) : <div className="bmp-empty">No folders yet — create one below.</div>}
+          </div>
+          <div className="bmp-new">
+            <input
+              placeholder="New folder name"
+              value={bmNew}
+              onChange={(e) => setBmNew(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const next = createStudentFolder(folders, bmNew);
+                  if (next) {
+                    setFolders(toggleStudentInFolder(next, next[next.length - 1].id, bmPop.student.id));
+                    setBmNew('');
+                  }
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const next = createStudentFolder(folders, bmNew);
+                if (next) {
+                  setFolders(toggleStudentInFolder(next, next[next.length - 1].id, bmPop.student.id));
+                  setBmNew('');
+                }
+              }}
+              aria-label="Create folder and save"
+            >
+              <Plus strokeWidth={2.6} />
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* ---------------- v17 · report modals (portaled) ----------------
+          ReportCardModal → GET /principal/student-report/{id} and
+          TeacherReportModal → GET /principal/teacher-report/{id}; both
+          routes allow school_admin (verified in principal.py), so the
+          modals keep their default fetchers. */}
+      {reportId != null && createPortal(
+        <ReportCardModal
+          studentId={reportId}
+          onClose={() => setReportId(null)}
+          totalStudents={stats?.students}
+          saved={savedIds.has(reportId)}
+          onBookmark={onBookmark}
+        />,
+        document.body,
+      )}
+      {teacherId != null && createPortal(
+        <TeacherReportModal
+          teacherId={teacherId}
+          onClose={() => setTeacherId(null)}
+          onOpenClass={openClassById}
+          onOpenReport={openReport}
+          onBookmark={onBookmark}
+          totalClasses={(classes || []).length}
+        />,
+        document.body,
       )}
 
       {/* ---------------- toast ---------------- */}

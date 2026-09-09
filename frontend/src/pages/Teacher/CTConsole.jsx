@@ -14,11 +14,17 @@
      ctMarks  Academic Marks      → /academics/*   (per-term marks grid)
      ctTeach  Teaching Classes    → /ct/teaching-classes
      ctMy     My Report           → /ct/teacher-report (via report modal)
-     ctTT     Timetable           → /timetable/teacher/{me} */
+     ctTT     Timetable           → /timetable/teacher/{me}
+
+   v17 designer-port delta: wired bookmarks + Saved view (shared 'fx-folders'
+   store), console global search in the pagehead (Ctrl K / "/"), a Saved nav
+   entry (via DashSidebar's groups API) and the school name on the tier tag
+   (/ct/me now returns school). ACADEMIC PERFORMANCE / COMPARE are honestly
+   skipped: /principal/radar + /principal/compare are leadership-gated. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Menu, Moon, Sun } from 'lucide-react';
+import { BookOpen, Bookmark, GraduationCap, Menu, Moon, Plus, Sun } from 'lucide-react';
 import {
   fetchCtClassDashboard, fetchCtMe, fetchCtTeachingClasses,
 } from '../Principal/dashboard/data';
@@ -37,7 +43,9 @@ import { PageHead, TierBand, Tier } from '../../components/v16/Shell';
 import { TIER_ICONS } from '../../components/v16/icons';
 import ExportCsvButton from '../../components/v16/ExportCsvButton';
 import api from '../../api/client';
-import { bandOf, initials, mean, pct } from '../Principal/dashboard/util';
+import GlobalSearch from '../Principal/dashboard/GlobalSearch';
+import SavedStudents from '../Principal/dashboard/SavedStudents';
+import { bandOf, initials, loadFolders, mean, pct, saveFolders } from '../Principal/dashboard/util';
 import '../Principal/dashboard/dashboard.css';
 import '../Principal/dashboard/v15.css';
 import '../Principal/dashboard/v16.css';
@@ -475,7 +483,7 @@ function CTMarks({ cls }) {
 }
 
 /* ─────────────────────────── 05 TEACHING CLASSES ───────────────────────── */
-function CTTeaching({ data, onOpenReport }) {
+function CTTeaching({ data, onOpenReport, onOpenClass }) {
   const [sel, setSel] = useState('all');
   const [q, setQ] = useState('');
   const reveal = useReveal();
@@ -497,6 +505,12 @@ function CTTeaching({ data, onOpenReport }) {
   const shown = q.trim()
     ? roster.filter((k) => k.name.toLowerCase().includes(q.trim().toLowerCase()))
     : roster;
+  /* v17: bar click → the CT's own class switches to My Class; other classes
+     stay inert (their detail is not reachable at the class_teacher role —
+     ct.py's _ct_class_of ignores class_id for CT accounts). */
+  const cmpBars = classes
+    .map((c) => ({ id: c.id, label: c.name, tip: `Class ${c.name} · ${pct(c.avg)}% · overall rank #${c.rank}`, val: pct(c.avg) }))
+    .sort((a, b) => b.val - a.val);
 
   return (
     <section className="lvl lvl-2 compact first">
@@ -543,8 +557,8 @@ function CTTeaching({ data, onOpenReport }) {
           <div className="chead"><span className="label">CLASS COMPARISON · {String(subjName).toUpperCase()} · {classes.length} CLASSES</span></div>
           <div className="cbody">
             <BarChart
-              items={classes.map((c) => ({ label: c.name, tip: `Class ${c.name} · ${pct(c.avg)}% · overall rank #${c.rank}`, val: pct(c.avg) }))
-                .sort((a, b) => b.val - a.val)}
+              items={cmpBars}
+              onClick={(i) => onOpenClass?.(cmpBars[i]?.id)}
             />
           </div>
         </div>
@@ -657,6 +671,21 @@ function CTTimetable({ teacherId, teacherName }) {
 
 /* ═════════════════════════════ the console shell ═════════════════════════ */
 
+/* v17 standalone sidebar nav (DashSidebar's v16 groups API). The dedicated
+   ct branch renders no Saved entry, so the console passes an explicit group
+   with the SAME links / icons / lvl values as that branch (they mirror the
+   designer's data-lvl attributes) plus the designer's "Saved" footer item
+   (class-teacher.html #savedLink, lvl 5) wired to onGo('saved'). */
+const CT_NAV_LINKS = [
+  { key: 'ctHome', label: 'My Class', lvl: 3, Icon: GraduationCap },
+  { key: 'ctAtt', label: 'Attendance', lvl: 2, Icon: BookOpen },
+  { key: 'ctTask', label: 'Task Completion', lvl: 2, Icon: BookOpen },
+  { key: 'ctMarks', label: 'Academic Marks', lvl: 3, Icon: BookOpen },
+  { key: 'ctTeach', label: 'Teaching Classes', lvl: 2, Icon: GraduationCap },
+  { key: 'ctMy', label: 'My Report', lvl: 6, Icon: BookOpen },
+  { key: 'ctTT', label: 'Timetable', lvl: 2, Icon: BookOpen },
+];
+
 function ModeButton() {
   const { mode, toggle } = useTheme() || {};
   return (
@@ -675,11 +704,70 @@ function ModeButton() {
    standalone (CTConsole below) or embedded in the principal dashboard's
    shell when the signed-in user also holds a class-teacher post (dual-mode
    sidebar; the .pd-root.ct-root CSS hides that shell's AI rail for us). */
-export function CTWorkspace({ me, teach, page = 'ctHome' }) {
+export function CTWorkspace({ me, teach, page = 'ctHome', onGo, onSavedCount }) {
   const [reportId, setReportId] = useState(null);
   const [showMyReport, setShowMyReport] = useState(false);
   const [toast, setToast] = useState(null);
-  const [dashInfo, setDashInfo] = useState(null);
+  const [dash, setDash] = useState(null);
+
+  /* v17 wired bookmarks — the same 'fx-folders' store the principal
+     dashboard uses, so a dual-mode account sees ONE folder list. All state
+     lives here (the workspace renders in both embeds); the standalone
+     console gets the live Saved count reported up via onSavedCount. */
+  const [folders, setFolders] = useState(loadFolders);
+  const [bmPop, setBmPop] = useState(null);
+  const [bmNew, setBmNew] = useState('');
+  const gsRef = useRef(null);
+
+  useEffect(() => { saveFolders(folders); }, [folders]);
+  const savedIds = useMemo(() => new Set(folders.flatMap((f) => f.studentIds)), [folders]);
+  useEffect(() => { onSavedCount?.(savedIds.size); }, [savedIds.size, onSavedCount]);
+
+  const createFolder = (name) => {
+    const n = (name || '').trim();
+    if (!n) return null;
+    const f = { id: `f${Date.now()}${Math.floor(Math.random() * 999)}`, name: n, studentIds: [] };
+    setFolders((p) => [...p, f]);
+    return f;
+  };
+  const deleteFolder = (id) => setFolders((p) => p.filter((f) => f.id !== id));
+  const toggleInFolder = (folderId, sid) => setFolders((p) => p.map((f) => (
+    f.id === folderId
+      ? { ...f, studentIds: f.studentIds.includes(sid) ? f.studentIds.filter((x) => x !== sid) : [...f.studentIds, sid] }
+      : f
+  )));
+
+  /* bookmark popover anchor — same geometry as the principal dashboard's */
+  const onBookmark = useCallback((e, student) => {
+    if (!student?.id) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const w = 230;
+    const left = Math.min(Math.max(10, rect.left - 90), window.innerWidth - w - 10);
+    const top = rect.bottom + 8 + (window.innerHeight - rect.bottom < 260 ? -rect.height - 250 : 0);
+    setBmPop({ student: { id: student.id, name: student.name || `Student ${student.id}` }, left, top });
+    setBmNew('');
+  }, []);
+
+  /* close the bookmark popover on any outside click or scroll */
+  useEffect(() => {
+    if (!bmPop) return undefined;
+    const close = (e) => {
+      if (e.target.closest?.('.bm-pop')) return;
+      setBmPop(null);
+    };
+    const onScroll = () => setBmPop(null);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('scroll', onScroll, true);
+    };
+  }, [bmPop]);
+
+  const openReport = useCallback((student) => {
+    setBmPop(null);
+    setReportId(student?.id ?? null);
+  }, []);
 
   /* the workspace owns the scrolling <main> in BOTH embeds (standalone
      console + principal-dashboard dual mode, where the shell's mainRef is
@@ -690,27 +778,92 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
     mainRef.current?.scrollTo({ top: 0 });
   }, [page]);
 
+  /* keyboard: Ctrl K / "/" focus the console search, Escape closes
+     everything (bookmark popover, saved view, report modals). Safe inside
+     the principal embed: CTWorkspace only mounts while the CT mode is
+     active — where the principal pagehead (and its own Ctrl K target) is
+     not rendered. The search dropdown itself closes on Escape while the
+     input is focused (GlobalSearch); the blur here covers Escape pressed
+     elsewhere so a stale dropdown can never linger. */
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') {
-        setReportId(null); setShowMyReport(false);
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        gsRef.current?.focus();
+        gsRef.current?.select?.();
+      } else if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
+        e.preventDefault();
+        gsRef.current?.focus();
+      } else if (e.key === 'Escape') {
+        setBmPop(null);
+        setReportId(null);
+        setShowMyReport(false);
+        if (page === 'saved') onGo?.('ctHome');
+        gsRef.current?.blur();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, []);
+  }, [page, onGo]);
 
-  /* tier-band numbers (N STUDENTS) — same payload the My Class page renders;
-     one light fetch per class so the band reads real API data everywhere */
+  /* tier-band numbers (N STUDENTS) + console-search cohort — same payload
+     the My Class page renders; one light fetch per class so the band and
+     the search read real API data everywhere */
   const clsId = me?.class?.id;
   useEffect(() => {
     if (!clsId) return undefined;
     let alive = true;
     fetchCtClassDashboard(clsId)
-      .then((d) => { if (alive) setDashInfo(d?.info || null); })
+      .then((d) => { if (alive) setDash(d || null); })
       .catch(() => { /* the band simply omits the count */ });
     return () => { alive = false; };
   }, [clsId]);
+
+  /* v17 console search — client-side over the CT-scoped cohort (the class
+     dashboard for My Class + the teaching-classes report cohort).
+     /principal/students is leadership-gated (principal.py _allowed), so
+     nothing server-side here; rows map to GlobalSearch's student shape. */
+  const searchCohort = useMemo(() => {
+    const byId = new Map();
+    (teach?.__students || []).forEach((k) => {
+      if (k?.id == null) return;
+      byId.set(Number(k.id), {
+        id: Number(k.id),
+        name: k.name,
+        className: k.class_name || me?.class?.name || '—',
+        avg: k.score ?? null,
+        rank: k.rank ?? null,
+      });
+    });
+    (dash?.students || []).forEach((s) => {
+      byId.set(Number(s.id), {
+        id: Number(s.id),
+        name: s.name,
+        className: me?.class?.name || '—',
+        avg: s.avg ?? null,
+        rank: s.rank ?? null,
+      });
+    });
+    return [...byId.values()];
+  }, [teach, dash, me?.class?.name]);
+
+  const ctStudentFetcher = useCallback(async ({ search }) => {
+    const q = String(search || '').trim().toLowerCase();
+    const matched = q
+      ? searchCohort.filter((s) => String(s.name || '').toLowerCase().includes(q))
+      : searchCohort;
+    return { students: matched.slice(0, 8), total: matched.length };
+  }, [searchCohort]);
+
+  /* the teacher's classes feed the search's CLASSES section */
+  const ctClasses = teach?.classes || [];
+
+  /* class bar click → My Class view, own class only: /ct/class-dashboard
+     deliberately ignores class_id for class_teacher accounts (ct.py
+     _ct_class_of), so another class's detail is unreachable at this role. */
+  const openClass = useCallback((id) => {
+    if (id != null && Number(id) === Number(me?.class?.id)) onGo?.('ctHome');
+  }, [me, onGo]);
 
   if (!me) {
     return (
@@ -722,9 +875,10 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
 
   const cls = me.class;
   const teacher = me.teacher;
-  /* designer tag: "CLASS 10-EMERALD · GNPS MAILLOOR · 30 STUDENTS" — no CT
-     endpoint exposes a school name, so that segment is included only when
-     the API provides one (me.school?.name / dashInfo.school_name). */
+  const dashInfo = dash?.info || null;
+  /* designer tag: "CLASS 10-EMERALD · GNPS MAILLOOR · 30 STUDENTS" — the
+     school segment now comes straight from /ct/me (me.school.name, added
+     in v17); dashInfo.school_name remains a fallback for older payloads. */
   const bandTag = [
     `CLASS ${cls.name}`,
     me.school?.name || dashInfo?.school_name || null,
@@ -738,9 +892,35 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
         eyebrow="Fetch-X · Class Teacher Console"
         title="Class Teacher Dashboard"
         subtitle={`Class Teacher · Classroom intelligence for ${cls.name}`}
+        searchSlot={(
+          <GlobalSearch
+            inputRef={gsRef}
+            studentFetcher={ctStudentFetcher}
+            classesAll={ctClasses}
+            placeholder={`Search ${searchCohort.length} students, your classes…`}
+            onOpenClass={openClass}
+            onOpenStudent={openReport}
+          />
+        )}
         actions={<ModeButton />}
       />
 
+      {page === 'saved' ? (
+        /* v17 designer "Saved" — the shared folder view. Report cards resolve
+           through /principal/student-report, which the backend grants to
+           class-teacher accounts only for their OWN class; other saved
+           students render the component's honest "Unavailable" card instead
+           of breaking the page. */
+        <SavedStudents
+          folders={folders}
+          onCreate={createFolder}
+          onDeleteFolder={deleteFolder}
+          onRemoveStudent={toggleInFolder}
+          onBack={() => onGo?.('ctHome')}
+          onOpenReport={openReport}
+          savedCount={savedIds.size}
+        />
+      ) : (
       <Tier tier="ct">
         <TierBand
           tier="ct"
@@ -757,29 +937,89 @@ export function CTWorkspace({ me, teach, page = 'ctHome' }) {
             classesAll={[]}
             fetcher={fetchCtClassDashboard}
             embedded
-            savedIds={new Set()}
-            onBookmark={() => {}}
-            onOpenReport={(s) => setReportId(s.id)}
+            savedIds={savedIds}
+            onBookmark={onBookmark}
+            onOpenReport={openReport}
           />
         )}
         {page === 'ctAtt' && <CTAttendance cls={cls} />}
         {page === 'ctTask' && <CTTasks cls={cls} />}
         {page === 'ctMarks' && <CTMarks cls={cls} />}
         {page === 'ctTeach' && (
-          <CTTeaching data={teach} onOpenReport={(s) => setReportId(s.id)} />
+          <CTTeaching data={teach} onOpenReport={openReport} onOpenClass={openClass} />
         )}
         {page === 'ctMy' && (
           <CTMy report={teach?.__report || null} onOpenFull={() => setShowMyReport(true)} />
         )}
         {page === 'ctTT' && <CTTimetable teacherId={teacher.id} teacherName={teacher.name} />}
       </Tier>
+      )}
 
       {reportId != null && createPortal(
-        <ReportCardModal studentId={reportId} onClose={() => setReportId(null)} />,
+        <ReportCardModal
+          studentId={reportId}
+          onClose={() => setReportId(null)}
+          totalStudents={dashInfo?.students}
+          saved={savedIds.has(reportId)}
+          onBookmark={onBookmark}
+        />,
         document.body,
       )}
       {showMyReport && createPortal(
-        <TeacherReportModal teacherId={teacher.id} fetcher={async () => api.get('/ct/teacher-report').then((r) => r.data)} onClose={() => setShowMyReport(false)} />,
+        <TeacherReportModal
+          teacherId={teacher.id}
+          fetcher={async () => api.get('/ct/teacher-report').then((r) => r.data)}
+          onClose={() => setShowMyReport(false)}
+          onBookmark={onBookmark}
+        />,
+        document.body,
+      )}
+
+      {/* v17 bookmark-to-folder popover — same markup + geometry as the
+         principal dashboard's (Dashboard.jsx bm-pop), driven by the shared
+         'fx-folders' store so saved students appear in the Saved view */}
+      {bmPop && createPortal(
+        <div className="bm-pop open" style={{ left: bmPop.left, top: bmPop.top }} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="bmp-t">SAVE · {bmPop.student.name.toUpperCase()}</div>
+          <div>
+            {folders.length ? folders.map((f) => (
+              <label className="bmopt" key={f.id}>
+                <input
+                  type="checkbox"
+                  checked={f.studentIds.includes(bmPop.student.id)}
+                  onChange={() => toggleInFolder(f.id, bmPop.student.id)}
+                />
+                <i className="bx" />
+                <span>{f.name}</span>
+                <em>{f.studentIds.length}</em>
+              </label>
+            )) : <div className="bmp-empty">No folders yet — create one below.</div>}
+          </div>
+          <div className="bmp-new">
+            <input
+              placeholder="New folder name"
+              value={bmNew}
+              onChange={(e) => setBmNew(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const f = createFolder(bmNew);
+                  if (f) { toggleInFolder(f.id, bmPop.student.id); setBmNew(''); }
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const f = createFolder(bmNew);
+                if (f) { toggleInFolder(f.id, bmPop.student.id); setBmNew(''); }
+              }}
+              aria-label="Create folder and save"
+            >
+              <Plus strokeWidth={2.6} />
+            </button>
+          </div>
+        </div>,
         document.body,
       )}
 
@@ -797,6 +1037,11 @@ export default function CTConsole() {
   const [teach, setTeach] = useState(null);
   const [page, setPage] = useState('ctHome');
   const [mobNav, setMobNav] = useState(false);
+  /* badge for the sidebar's Saved entry — CTWorkspace owns the folder
+     store (it renders in both embeds) and reports the live count up */
+  const [savedCount, setSavedCount] = useState(
+    () => new Set(loadFolders().flatMap((f) => f.studentIds)).size,
+  );
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try { return localStorage.getItem('si-nav') === '1'; } catch { return false; }
   });
@@ -849,18 +1094,28 @@ export default function CTConsole() {
     <div className={`pd-root v15-root ct-root${navCollapsed ? ' nav-collapsed' : ''}${mobNav ? ' mob-nav' : ''}`}>
       <LevelThemeStyle />
       <DashSidebar
-        ct
-        ctLabel={cls.name.toUpperCase()}
-        roleLabel="CLASS TEACHER"
         active={page}
         onGo={navGo}
         collapsed={navCollapsed}
         onToggle={() => setNavCollapsed((c) => !c)}
         userName={teacher.name}
+        roleLabel="CLASS TEACHER"
         onSignOut={signOut}
+        /* v17 Saved entry — see CT_NAV_LINKS above */
+        activeGroup="ct"
+        savedCount={savedCount}
+        groups={[{
+          key: 'ct',
+          label: `CLASS TEACHER · ${cls.name.toUpperCase()}`,
+          dot: '#b45f04',
+          links: [
+            ...CT_NAV_LINKS.map(({ key, label, lvl, Icon }) => ({ key, label, lvl, icon: <Icon strokeWidth={1.8} /> })),
+            { key: 'saved', label: 'Saved', lvl: 5, icon: <Bookmark strokeWidth={2} /> },
+          ],
+        }]}
       />
 
-      <CTWorkspace me={me} teach={teach} page={page} />
+      <CTWorkspace me={me} teach={teach} page={page} onGo={navGo} onSavedCount={setSavedCount} />
 
       <button type="button" className="v15-mobtoggle" aria-label="Open navigation" onClick={() => setMobNav(true)}>
         <Menu strokeWidth={2.2} />
